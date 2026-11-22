@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% block title %}Nouveau devis · IAQuote{% endblock %}{% block content %}
+<section class="hero"><div><span class="eyebrow">NOUVEAU DEVIS</span><h1>Composer un devis</h1></div></section>
+<form method="post" class="panel form-stack"><label>Client<input name="customer_name" placeholder="Nom du client"></label><label>Notes<textarea name="notes" rows="3"></textarea></label><h2>Produits</h2><div id="quote-lines"><div class="quote-line"><select name="product_id" required><option value="">Choisir un produit</option>{% for p in products %}<option value="{{ p.id }}">{{ p.code }} · {{ p.designation }} · {{ '%.2f'|format(p.price or 0) }} €</option>{% endfor %}</select><input type="number" name="quantity" min="1" value="1"></div></div><div><button type="button" class="button" data-add-line>Ajouter une ligne</button> <button class="button primary">Créer le devis</button></div></form>
+{% endblock %}

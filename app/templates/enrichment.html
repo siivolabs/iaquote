@@ -1,0 +1,14 @@
+{% extends 'base.html' %}{% block title %}Enrichissement · IAQuote{% endblock %}
+{% block content %}
+<section class="hero"><div><span class="eyebrow">ENRICHISSEMENT</span><h1>Traitement automatique du catalogue</h1><p>Recherche par code, validation de la désignation, extraction et stockage local.</p></div>
+<form method="post" action="{{ url_for('enrichment_start') }}"><input type="hidden" name="mode" value="missing_or_failed"><button class="button primary" {% if not configured %}disabled{% endif %}>Enrichir les absents et échecs</button></form></section>
+{% if not configured %}<div class="flash warning">L'endpoint de recherche doit être configuré dans l'environnement Docker.</div>{% endif %}
+<section class="panel job-card" {% if job and job.status in ['queued','running'] %}data-job-id="{{ job.id }}"{% endif %}>
+  <div class="panel-head"><div><span class="status {{ job.status if job else 'missing' }}" id="job-status">{{ job.status if job else 'aucun traitement' }}</span><h2>Progression globale</h2></div><form method="post" action="{{ url_for('enrichment_start') }}"><input type="hidden" name="mode" value="failed"><button class="button small" {% if not configured %}disabled{% endif %}>Relancer les échecs</button></form></div>
+  {% if job %}{% set pct=(job.processed/job.total*100) if job.total else 100 %}<div class="progress large"><span id="progress-bar" style="width:{{ pct }}%"></span></div><p id="progress-label">{{ job.processed }} / {{ job.total }} · {{ '%.1f'|format(pct) }} %</p><div class="chips"><span id="ok-count">{{ job.succeeded }} vérifiés</span><span id="fail-count">{{ job.failed }} échecs</span><span>{{ stats.missing }} restants</span></div>{% else %}<div class="empty">Aucun traitement.</div>{% endif %}
+</section>
+<div class="stats-grid compact"><article class="stat"><span>Total</span><strong>{{ stats.total }}</strong></article><article class="stat"><span>Vérifiés</span><strong>{{ stats.verified }}</strong></article><article class="stat"><span>À traiter</span><strong>{{ stats.missing }}</strong></article><article class="stat"><span>Échecs</span><strong>{{ stats.failed }}</strong></article></div>
+<section class="panel"><div class="table-wrap"><table><thead><tr><th>Référence</th><th>Produit</th><th>Statut</th><th>Confiance</th><th>Note</th><th></th></tr></thead><tbody>
+{% for row in rows %}<tr><td><code>{{ row.code }}</code></td><td>{{ row.designation }}</td><td><span class="status {{ row.status or 'missing' }}">{{ row.status or 'missing' }}</span></td><td>{{ '%.0f'|format((row.match_score or 0)*100) }} %</td><td class="note">{{ row.last_error or row.source_title or '—' }}</td><td><form method="post" action="{{ url_for('enrichment_one', product_id=row.id) }}"><button class="link-button" {% if not configured %}disabled{% endif %}>Relancer</button></form></td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

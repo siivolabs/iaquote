@@ -1,10 +1,4 @@
-"Code article";"Code famille";Désignation;Catégorie;Marque;"Type de référencement";"Prix d'achat €";Marge;Indice;"Prix barré";"Date fin prix barré";"Prix TTC €";"Stock central";"Stock boutique";"Commandes en cours";"Article Obsolète";"Ventes 7j";"Ventes 14j";"Ventes 28j";Tendance;"Colisage central";"Colisage magasin";"Colisage transport";Représentant;"Date de dernière mise à jour"
-DEMO-CPU-01;DEMO;"Processeur Démo AM5";Processeur;DEMO;;"180,00 €";"40,00 €";22,22%;"0,00 €";;"249,90 €";10;2;0;Non;1;2;4;=;1;1;1;;"2026-01-01 00:00:00"
-DEMO-MB-01;DEMO;"Carte mère Démo AM5";"Carte mère";DEMO;;"110,00 €";"25,00 €";22,73%;"0,00 €";;"159,90 €";10;2;0;Non;1;2;4;=;1;1;1;;"2026-01-01 00:00:00"
-DEMO-RAM-01;DEMO;"Mémoire Démo 32 Go DDR5";"Mémoire PC";DEMO;;"60,00 €";"15,00 €";25,00%;"0,00 €";;"89,90 €";10;2;0;Non;1;2;4;=;1;1;1;;"2026-01-01 00:00:00"
-DEMO-SSD-01;DEMO;"SSD Démo 1 To";"Disque SSD";DEMO;;"50,00 €";"12,00 €";24,00%;"0,00 €";;"74,90 €";10;2;0;Non;1;2;4;=;1;1;1;;"2026-01-01 00:00:00"
-DEMO-GPU-01;DEMO;"Carte graphique Démo 12 Go";"Carte graphique";DEMO;;"350,00 €";"60,00 €";17,14%;"0,00 €";;"499,90 €";10;2;0;Non;1;2;4;=;1;1;1;;"2026-01-01 00:00:00"
-DEMO-PSU-01;DEMO;"Alimentation Démo 750 W";"Alimentation PC";DEMO;;"70,00 €";"15,00 €";21,43%;"0,00 €";;"99,90 €";10;2;0;Non;1;2;4;=;1;1;1;;"2026-01-01 00:00:00"
-DEMO-CASE-01;DEMO;"Boîtier Démo ATX";"Boîtier PC";DEMO;;"55,00 €";"14,00 €";25,45%;"0,00 €";;"84,90 €";10;2;0;Non;1;2;4;=;1;1;1;;"2026-01-01 00:00:00"
-DEMO-COOL-01;DEMO;"Refroidisseur Démo AM5";"Ventilateur processeur";DEMO;;"30,00 €";"10,00 €";33,33%;"0,00 €";;"49,90 €";10;2;0;Non;1;2;4;=;1;1;1;;"2026-01-01 00:00:00"
-DEMO-LAPTOP-01;DEMO;"Portable Démo 16 pouces";"PC portable";DEMO;;"500,00 €";"80,00 €";16,00%;"0,00 €";;"699,90 €";10;2;0;Non;1;2;4;=;1;1;1;;"2026-01-01 00:00:00"
+code;designation;prix;stock
+DEMO-CPU-01;Processeur exemple 8 cœurs;299,90;4
+DEMO-RAM-01;Mémoire exemple 32 Go;89,90;12
+DEMO-SSD-01;SSD exemple 1 To;74,90;8

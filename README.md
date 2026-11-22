@@ -1,129 +1,55 @@
-# IAQuote
+# IAQuote 0.3.2
 
-IAQuote est une application web de préparation de devis informatiques. Elle importe un catalogue CSV privé, applique des contrôles déterministes de compatibilité, puis utilise un modèle Ollama pour rédiger un argumentaire commercial sans lui déléguer les prix, les marges ni les décisions techniques.
+Application locale de catalogue, devis et enrichissement de fiches techniques.
 
-## Fonctions
+## Nouveautés 0.3.2
 
-- import CSV avec détection du séparateur et de l'encodage ;
-- catalogue local SQLite, stocks, prix et marges ;
-- enrichissement automatique de tout le catalogue, en arrière-plan, depuis une source HTTPS configurée en privé ;
-- file persistante avec progression, reprise après redémarrage, arrêt et relance des échecs ;
-- interface sombre par défaut avec thème clair facultatif ;
-- sélection pour PC fixe ou portable ;
-- contrôles de socket, mémoire, format, dimensions, refroidissement, alimentation et budget ;
-- argumentaire Ollama avec repli local si le modèle est indisponible ;
-- références copiables et historique des propositions ;
-- image Docker publiable automatiquement dans GHCR.
+- découverte directe par code article via un endpoint de recherche configurable ;
+- validation du titre de la fiche par rapport à la désignation du CSV ;
+- extraction structurée des caractéristiques et stockage SQLite ;
+- reprise au démarrage des traitements interrompus et relance des échecs ;
+- statistiques calculées depuis la base et progression actualisée dans l'interface ;
+- migrations additives : les tables et données existantes ne sont jamais supprimées.
 
-## Confidentialité du dépôt public
+## Déploiement Docker / Dockge
 
-Le dépôt ne contient aucun catalogue réel, prix d'achat, marge, stock, historique, nom de collaborateur, adresse privée ni adresse de fournisseur. Le fichier `examples/catalogue-demo.csv` est entièrement synthétique et sert uniquement aux tests.
+1. Copiez `.env.example` vers `.env` sur l'hôte (ne publiez pas ce fichier).
+2. Renseignez `CATALOG_SEARCH_BASE_URL` avec l'URL de recherche, terminée par `/` ou contenant `{code}`.
+3. Renseignez une valeur aléatoire longue pour `SECRET_KEY`.
+4. Déployez `docker-compose.yml` dans Dockge.
+5. Conservez le volume nommé `iaquote_data` lors des mises à jour.
 
-Ne versionnez jamais :
+Le service est exposé sur `http://HOTE:8094` et le contrôle de santé sur `/api/health`.
 
-- `.env` ;
-- les fichiers CSV réels ;
-- le dossier `data/` ;
-- les bases SQLite ;
-- les journaux et exports de production.
-
-Ces éléments sont couverts par `.gitignore` et `.dockerignore`.
-
-## Démarrage local
-
-```bash
-cp .env.example .env
-# Modifiez au minimum SECRET_KEY et OLLAMA_BASE_URL.
-docker compose up -d --build
-```
-
-L'interface est ensuite disponible sur `http://adresse-du-nas:8094`.
-
-Au premier démarrage, la base est vide. Importez le catalogue réel depuis l'onglet **Catalogue**. L'import répond immédiatement, puis tous les produits nouveaux ou techniquement modifiés sont enrichis dans une file d'arrière-plan. Les colonnes minimales sont :
-
-- `Code article`
-- `Désignation`
-- `Catégorie`
-- `Prix TTC €`
-
-Les autres colonnes reconnues sont documentées par le fichier synthétique `examples/catalogue-demo.csv`.
-
-## Configuration privée de la source technique
-
-Toutes les adresses externes restent dans `.env`, jamais dans le code ou la documentation publiée.
-
-```dotenv
-TECHNICAL_ALLOWED_HOSTS=<domaine-autorise>
-TECHNICAL_PRODUCT_PATH_MARKER=/fiche/
-TECHNICAL_LINK_SELECTOR=a[href]
-
-# Recherche principale HTML, API JSON ou liste de replis (facultatifs).
-TECHNICAL_SEARCH_URL=<modele-https-contenant-{query}>
-TECHNICAL_SEARCH_API_URL=
-TECHNICAL_SEARCH_FALLBACK_URLS=
-TECHNICAL_SEARCH_ALLOWED_HOSTS=
-
-# Repli indépendant intégré ; désactivez-le si une recherche privée est imposée.
-TECHNICAL_DEFAULT_DISCOVERY=true
-TECHNICAL_SEARCH_STOP_SCORE=0.72
-TECHNICAL_SEARCH_DELAY=2.5
-TECHNICAL_SEARCH_TIMEOUT=25
-TECHNICAL_REQUEST_DELAY=2.5
-TECHNICAL_TIMEOUT=25
-AUTO_ENRICH_ON_IMPORT=true
-```
-
-Les modèles de recherche acceptent `{query}` (encodé), `{domain}` (premier domaine autorisé) et `{raw_query}` (brut). `TECHNICAL_ALLOWED_HOSTS` et `TECHNICAL_SEARCH_ALLOWED_HOSTS` acceptent des listes séparées par des virgules. L’application refuse les schémas non HTTPS, les domaines absents des listes autorisées et les redirections non autorisées. Les fiches retenues doivent aussi correspondre à `TECHNICAL_PRODUCT_PATH_MARKER`.
-
-## Enrichissement automatique d'un catalogue complet
-
-- Chaque import planifie tous les articles sans fiche technique, sans demander de saisie manuelle.
-- Les fiches déjà vérifiées restent en cache. Une modification de la désignation, de la marque ou de la catégorie invalide uniquement la fiche concernée.
-- Le traitement est séquentiel et respecte `TECHNICAL_REQUEST_DELAY` pour ne pas solliciter excessivement la source.
-- Un échec est enregistré pour le produit concerné, mais les produits suivants continuent d'être traités.
-- La tâche et sa progression sont stockées dans SQLite. Après un redémarrage du conteneur, une tâche interrompue reprend automatiquement.
-- L'onglet **Enrichissement** permet de suivre les produits vérifiés, à contrôler, en échec et restants, puis de relancer tout ce qui manque.
-
-## Déploiement GitHub, GHCR et Dockge
-
-1. Créez un dépôt GitHub vide nommé `iaquote`.
-2. Décompressez l’archive puis publiez le contenu du dossier `iaquote/` à la racine de la branche `main`.
-3. L'action `.github/workflows/container.yml` exécute les tests puis publie `ghcr.io/<compte>/devisia:latest`.
-4. Dans `compose.dockge.yml`, remplacez `VOTRE_COMPTE` par le propriétaire du dépôt.
-5. Dans Dockge, créez la stack avec le contenu de `compose.dockge.yml` et un fichier `.env` privé adapté au NAS.
-6. Si l'image est privée, configurez l'authentification GHCR sur l'hôte Docker ou rendez le package public dans GitHub.
-
-## Tests
+## Développement
 
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt pytest
-pytest -q
+pip install -r requirements-dev.txt
+pytest
+python run.py
 ```
 
-Le jeu de démonstration valide l'import, le devis fixe, le devis portable, les compatibilités et le mode de secours sans IA.
+## Tests réseau réels (optionnels)
 
-## Contrôles avant publication
+Les tests standards sont déterministes et ne dépendent pas du réseau. Pour valider les références réelles depuis un environnement autorisé :
 
 ```bash
-# Le résultat doit être vide.
-grep -RIn --exclude-dir=.git '<nom-interdit>' .
-
-# Vérifier qu'aucune donnée locale n'est suivie.
-git status --short
-git check-ignore -v .env data/devisia.sqlite catalogue-prive.csv
+RUN_LIVE_TESTS=1 \
+CATALOG_SEARCH_BASE_URL='https://catalogue.example/recherche/{code}' \
+pytest -m live -q
 ```
 
-Remplacez `<nom-interdit>` par tout terme ou domaine qui ne doit pas apparaître dans le dépôt public.
+L'endpoint réel doit être fourni au moment du test ; il n'est pas enregistré dans le dépôt.
 
-## Limites
+## Import CSV
 
-- La sélection reste un moteur de règles simple : le vendeur valide toujours la proposition finale.
-- Les fiches techniques incertaines sont marquées **À contrôler**.
-- La recherche automatique dépend de la structure HTML et des conditions d'utilisation de la source configurée.
-- L'application n'intègre pas d'authentification utilisateur ; exposez-la uniquement sur un réseau de confiance ou derrière un proxy d'authentification.
+Formats de séparateur acceptés : `;`, `,` et tabulation. Colonnes reconnues :
 
-## Licence
+- code : `code`, `reference`, `ref`, `sku`, `code_article` ;
+- désignation : `designation`, `description`, `produit`, `libelle`, `name` ;
+- prix : `prix`, `price`, `prix_ht`, `unit_price` ;
+- stock : `stock`, `quantite`, `qty`, `quantity`.
 
-MIT — voir `LICENSE`.
+Un nouvel import met à jour les produits portant le même code sans créer de doublon et peut être immédiatement placé dans la file d'enrichissement.

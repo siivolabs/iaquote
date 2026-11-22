@@ -1,0 +1,15 @@
+[project]
+name = "iaquote"
+version = "0.3.2"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --disable-warnings --strict-markers"
+markers = [
+  "live: accesses the configured external catalogue (opt-in)",
+  "e2e: exercises the complete HTTP-to-SQLite workflow",
+]
+filterwarnings = [
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
+]

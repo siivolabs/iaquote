@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}IAQuote{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">IQ</span><div><strong>IAQuote</strong><small>V{{ config.VERSION }} · catalogue local</small></div></div>
+  <div class="top-status"><span class="badge success">Application opérationnelle</span><span class="badge">SQLite persistant</span></div>
+</header>
+<nav class="nav" aria-label="Navigation principale">
+  <a class="{% if endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Tableau de bord</a>
+  <a class="{% if 'quote' in endpoint %}active{% endif %}" href="{{ url_for('quotes') }}">Devis</a>
+  <a class="{% if 'catalogue' in endpoint or endpoint == 'product_detail' %}active{% endif %}" href="{{ url_for('catalogue') }}">Catalogue</a>
+  <a class="{% if 'enrichment' in endpoint %}active{% endif %}" href="{{ url_for('enrichment') }}">Enrichissement</a>
+  <a class="{% if endpoint == 'history' %}active{% endif %}" href="{{ url_for('history') }}">Historique</a>
+</nav>
+<main class="container">
+  {% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
+  {% block content %}{% endblock %}
+</main>
+<script src="{{ url_for('static', path='app.js') }}" defer></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

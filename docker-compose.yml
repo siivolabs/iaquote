@@ -1,15 +1,20 @@
 services:
-  devisia:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: devisia
+  iaquote:
+    build: .
+    image: iaquote:0.3.2
+    container_name: iaquote
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-8094}:8000"
-    env_file:
-      - .env
+      - "8094:8080"
     environment:
       DATABASE_PATH: /data/devisia.sqlite
+      CATALOG_SEARCH_BASE_URL: ${CATALOG_SEARCH_BASE_URL:?Define CATALOG_SEARCH_BASE_URL in Dockge}
+      CATALOG_MATCH_THRESHOLD: ${CATALOG_MATCH_THRESHOLD:-0.58}
+      CATALOG_REQUEST_DELAY: ${CATALOG_REQUEST_DELAY:-1.0}
+      SECRET_KEY: ${SECRET_KEY:?Define SECRET_KEY in Dockge}
     volumes:
-      - ./data:/data
+      - iaquote_data:/data
+
+volumes:
+  iaquote_data:
+    name: iaquote_data
