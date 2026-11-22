@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+__pycache__
+.pytest_cache
+.venv
+venv
+data/*
+*.sqlite
+*.sqlite3
+*.db
+*.log
+
+!examples/catalogue-demo.csv

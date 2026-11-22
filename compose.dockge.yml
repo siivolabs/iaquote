@@ -1,0 +1,16 @@
+services:
+  devisia:
+    image: ghcr.io/VOTRE_COMPTE/devisia:latest
+    container_name: devisia
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8094}:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /data/devisia.sqlite
+    volumes:
+      - devisia_data:/data
+
+volumes:
+  devisia_data:

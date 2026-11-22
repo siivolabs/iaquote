@@ -1,0 +1,15 @@
+services:
+  devisia:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: devisia
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8094}:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /data/devisia.sqlite
+    volumes:
+      - ./data:/data

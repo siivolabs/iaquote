@@ -1,0 +1,11 @@
+[
+  {"code":"DEMO-CPU-01","status":"verified","confidence":1.0,"specs":{"socket":"AMD AM5","memory_type":"DDR5","tdp_w":105,"required_cooling_w":170,"integrated_graphics":true}},
+  {"code":"DEMO-MB-01","status":"verified","confidence":1.0,"specs":{"socket":"AMD AM5","memory_type":"DDR5","motherboard_format":"ATX"}},
+  {"code":"DEMO-RAM-01","status":"verified","confidence":1.0,"specs":{"memory_type":"DDR5","capacity_gb":32}},
+  {"code":"DEMO-SSD-01","status":"verified","confidence":1.0,"specs":{"storage_interface":"NVMe","capacity_gb":1000}},
+  {"code":"DEMO-GPU-01","status":"verified","confidence":1.0,"specs":{"gpu_memory":"12 Go","gpu_length_mm":270,"recommended_psu_w":650}},
+  {"code":"DEMO-PSU-01","status":"verified","confidence":1.0,"specs":{"power_w":750,"psu_standard":"ATX 3.1"}},
+  {"code":"DEMO-CASE-01","status":"verified","confidence":1.0,"specs":{"case_formats":["ATX","Micro ATX"],"case_max_gpu_mm":330,"case_max_cooler_mm":170}},
+  {"code":"DEMO-COOL-01","status":"verified","confidence":1.0,"specs":{"supported_sockets":["AMD AM5"],"cooler_height_mm":155,"cooler_tdp_w":200}},
+  {"code":"DEMO-LAPTOP-01","status":"verified","confidence":1.0,"specs":{"screen_size_in":16,"memory_gb":16,"storage_gb":512}}
+]

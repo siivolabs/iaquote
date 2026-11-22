@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>DevisIA V0.2</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">D</span><div><strong>DevisIA</strong><small>V0.2 · catalogue local + Ollama</small></div></div>
+    <div class="status-row"><span id="appStatus" class="pill neutral">Application…</span><span id="ollamaStatus" class="pill neutral">Ollama…</span></div>
+  </header>
+  <nav class="tabs" aria-label="Navigation">
+    <button class="tab active" data-view="dashboard">Tableau de bord</button>
+    <button class="tab" data-view="quote">Nouveau devis</button>
+    <button class="tab" data-view="catalog">Catalogue</button>
+    <button class="tab" data-view="enrichment">Enrichissement</button>
+    <button class="tab" data-view="history">Historique</button>
+  </nav>
+
+  <main>
+    <section id="dashboard" class="view active">
+      <div class="hero">
+        <div><p class="eyebrow">ASSISTANT BOUTIQUE</p><h1>Construire un devis à partir de données vérifiables.</h1><p>Les références, prix, marges et stocks viennent du CSV privé. Les caractéristiques viennent de la source technique configurée. Ollama rédige l'argumentaire sans décider des compatibilités.</p></div>
+        <button class="primary" data-go="quote">Créer un devis</button>
+      </div>
+      <div class="cards stats">
+        <article><span>Articles importés</span><strong id="statCatalog">—</strong></article>
+        <article><span>Fiches vérifiées</span><strong id="statVerified">—</strong></article>
+        <article><span>Devis enregistrés</span><strong id="statQuotes">—</strong></article>
+        <article><span>Modèle</span><strong id="statModel">qwen3:32b</strong></article>
+      </div>
+      <div class="grid two">
+        <article class="panel"><h2>Cycle de données</h2><ol class="steps"><li><b>Importer</b><span>Le CSV reste la source commerciale.</span></li><li><b>Enrichir</b><span>Les fiches techniques sont mises en cache dans SQLite.</span></li><li><b>Contrôler</b><span>Le moteur de règles vérifie les compatibilités connues.</span></li><li><b>Argumenter</b><span>Qwen3 formule une explication à partir des produits sélectionnés.</span></li></ol></article>
+        <article class="panel"><h2>Garde-fous</h2><ul class="checks-list"><li>Une référence absente du CSV n'entre pas dans le devis.</li><li>Un prix ou une marge n'est jamais demandé à l'IA.</li><li>Un contrôle inconnu reste affiché comme inconnu.</li><li>Le vendeur valide toujours la proposition finale.</li></ul></article>
+      </div>
+    </section>
+
+    <section id="quote" class="view">
+      <div class="section-head"><div><p class="eyebrow">NOUVEAU DEVIS</p><h1>Décrire le besoin client</h1></div></div>
+      <form id="quoteForm" class="panel form-grid">
+        <label class="wide">Besoin client<textarea id="clientNeed" rows="5" required>PC fixe pour jouer principalement à Dofus en 1080p, budget de 2 500 €, silencieux et évolutif.</textarea></label>
+        <label>Budget TTC (€)<input id="budget" type="number" min="1" step="0.01" value="2500" required></label>
+        <label>Type de machine<select id="machineType"><option value="auto">Détection automatique</option><option value="desktop">PC fixe</option><option value="laptop">PC portable</option></select></label>
+        <label>Stratégie<select id="strategy"><option value="balanced">Équilibrée</option><option value="value">Rapport prix / usage</option><option value="stock">Disponibilité boutique</option><option value="margin">Marge optimisée après adéquation</option></select></label>
+        <label class="toggle"><input id="verifiedOnly" type="checkbox" checked><span>Produits techniquement vérifiés uniquement</span></label>
+        <div class="wide actions"><button class="primary" type="submit">Générer la proposition</button><span id="quoteLoading" class="muted"></span></div>
+      </form>
+      <div id="quoteResult" class="result hidden"></div>
+    </section>
+
+    <section id="catalog" class="view">
+      <div class="section-head"><div><p class="eyebrow">CATALOGUE</p><h1>Références commerciales</h1></div><label class="file-button">Importer un CSV<input id="csvFile" type="file" accept=".csv,text/csv"></label></div>
+      <div class="toolbar panel"><input id="catalogSearch" placeholder="Code, désignation ou marque"><select id="categoryFilter"><option value="">Toutes les catégories</option></select><select id="statusFilter"><option value="">Tous les statuts</option><option value="verified">Vérifiés</option><option value="review">À contrôler</option><option value="missing">Non enrichis</option></select><button id="catalogRefresh" class="secondary">Rechercher</button></div>
+      <p id="catalogInfo" class="muted"></p>
+      <div class="table-wrap panel"><table><thead><tr><th>Référence</th><th>Produit</th><th>Catégorie</th><th>Prix TTC</th><th>Marge HT</th><th>Stock</th><th>Technique</th></tr></thead><tbody id="catalogRows"></tbody></table></div>
+      <div class="pager"><button id="prevPage" class="secondary">Précédent</button><span id="pageInfo"></span><button id="nextPage" class="secondary">Suivant</button></div>
+    </section>
+
+    <section id="enrichment" class="view">
+      <div class="section-head"><div><p class="eyebrow">ENRICHISSEMENT</p><h1>Fiches techniques</h1></div></div>
+      <div class="grid two">
+        <form id="enrichForm" class="panel form-stack"><h2>Enrichir une référence</h2><label>Code article<input id="enrichCode" placeholder="DEMO-CPU-01" required></label><label>Adresse exacte de la fiche technique <small>(facultative)</small><input id="enrichUrl" type="url" placeholder="Adresse HTTPS autorisée"></label><label class="toggle"><input id="enrichForce" type="checkbox"><span>Actualiser même si la fiche existe</span></label><button class="primary" type="submit">Lancer l'enrichissement</button><p id="enrichMessage" class="muted"></p></form>
+        <article class="panel"><h2>Comportement réseau</h2><p>L'application interroge uniquement la source définie dans la configuration privée, espace les requêtes et met le résultat en cache. Si la recherche automatique échoue, collez l'adresse exacte d'une fiche autorisée.</p><div class="notice">Une fiche incertaine est marquée <b>À contrôler</b> et n'est pas utilisée quand le filtre « vérifié uniquement » est actif.</div></article>
+      </div>
+      <div class="table-wrap panel"><table><thead><tr><th>Référence</th><th>Produit</th><th>Statut</th><th>Confiance</th><th>Source</th><th>Note</th></tr></thead><tbody id="enrichmentRows"></tbody></table></div>
+    </section>
+
+    <section id="history" class="view">
+      <div class="section-head"><div><p class="eyebrow">HISTORIQUE</p><h1>Propositions enregistrées</h1></div><button id="historyRefresh" class="secondary">Actualiser</button></div>
+      <div id="historyList" class="cards history"></div>
+      <div id="historyDetail" class="result hidden"></div>
+    </section>
+  </main>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
