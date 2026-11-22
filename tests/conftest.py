@@ -1,21 +1,27 @@
+"""Test bootstrap that also works with the `pytest` console entry point."""
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import pytest
-from fastapi.testclient import TestClient
 from app import create_app
 
 
-@pytest.fixture
-def app(tmp_path):
-    return create_app({
-        "TESTING": True,
-        "SECRET_KEY": "test-secret-key",
-        "DATABASE_PATH": str(tmp_path / "test.sqlite"),
-        "CATALOG_SEARCH_BASE_URL": "http://catalog.test/recherche/{code}",
-        "CATALOG_REQUEST_DELAY": 0,
-        "CATALOG_MATCH_THRESHOLD": 0.50,
-    })
+@pytest.fixture()
+def app(tmp_path, monkeypatch):
+    db = tmp_path / "test.sqlite"
+    monkeypatch.setenv("BOOTSTRAP_CSV", str(ROOT / "examples" / "catalogue-demo.csv"))
+    monkeypatch.setenv("PRESEED_PATH", str(ROOT / "examples" / "enrichissement-demo.json"))
+    monkeypatch.setenv("START_BACKGROUND_WORKER", "0")
+    application = create_app({"TESTING": True, "DATABASE_PATH": str(db), "START_BACKGROUND_WORKER": False})
+    application.config["TEST_DATABASE"] = str(db)
+    return application
 
 
-@pytest.fixture
+@pytest.fixture()
 def client(app):
-    with TestClient(app) as test_client:
-        yield test_client
+    return app.test_client()

@@ -1,7 +1,0 @@
-{% extends 'base.html' %}{% block title %}{{ product.designation }} · IAQuote{% endblock %}
-{% block content %}
-<section class="hero"><div><span class="eyebrow">{{ product.code }}</span><h1>{{ product.designation }}</h1><p>Dernière mise à jour : {{ product.updated_at or '—' }}</p></div><form method="post" action="{{ url_for('enrichment_one', product_id=product.id) }}"><button class="button primary">Rechercher à nouveau</button></form></section>
-<div class="two-col"><section class="panel"><h2>Correspondance</h2><dl class="details"><dt>Statut</dt><dd><span class="status {{ product.status or 'missing' }}">{{ product.status or 'missing' }}</span></dd><dt>Titre source</dt><dd>{{ product.source_title or '—' }}</dd><dt>Confiance</dt><dd>{{ '%.0f'|format((product.match_score or 0)*100) }} %</dd><dt>Tentatives</dt><dd>{{ product.attempts or 0 }}</dd>{% if product.last_error %}<dt>Dernière erreur</dt><dd class="error-text">{{ product.last_error }}</dd>{% endif %}</dl></section>
-<section class="panel"><h2>Données catalogue</h2><dl class="details"><dt>Marque</dt><dd>{{ product.brand or '—' }}</dd><dt>Prix</dt><dd>{{ '%.2f'|format(product.price or 0) }} €</dd><dt>Stock</dt><dd>{{ product.stock or 0 }}</dd></dl></section></div>
-<section class="panel"><h2>Caractéristiques ({{ specs|length }})</h2>{% if specs %}<div class="spec-grid">{% for key, value in specs.items() %}<div><dt>{{ key }}</dt><dd>{{ value }}</dd></div>{% endfor %}</div>{% else %}<div class="empty">Aucune caractéristique enregistrée.</div>{% endif %}</section>
-{% endblock %}

@@ -1,4 +1,0 @@
-{% extends 'base.html' %}{% block title %}Devis · IAQuote{% endblock %}{% block content %}
-<section class="hero"><div><span class="eyebrow">DEVIS</span><h1>Vos devis</h1><p>Documents calculés depuis le catalogue local.</p></div><a class="button primary" href="{{ url_for('quote_new') }}">Nouveau devis</a></section>
-<section class="panel"><div class="table-wrap"><table><thead><tr><th>Numéro</th><th>Client</th><th>Statut</th><th>Lignes</th><th>Total</th></tr></thead><tbody>{% for q in quotes %}<tr><td><a href="{{ url_for('quote_detail', quote_id=q.id) }}"><strong>{{ q.quote_number }}</strong></a></td><td>{{ q.customer_name or '—' }}</td><td><span class="status pending">{{ q.status }}</span></td><td>{{ q.lines }}</td><td>{{ '%.2f'|format(q.total) }} €</td></tr>{% else %}<tr><td colspan="5" class="empty">Aucun devis.</td></tr>{% endfor %}</tbody></table></div></section>
-{% endblock %}

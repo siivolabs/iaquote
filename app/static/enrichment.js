@@ -1,0 +1,3 @@
+const button=document.querySelector('#start');
+async function refresh(){const r=await fetch('/api/enrich/jobs/current');const d=await r.json();if(!d.job)return;document.querySelector('#job-status').textContent=d.job.status;document.querySelector('#percent').textContent=d.job.percent+' %';document.querySelector('.progress i').style.width=d.job.percent+'%';document.querySelector('#processed').textContent=d.job.processed;if(['pending','running','blocked'].includes(d.job.status))setTimeout(refresh,2500)}
+if(button)button.addEventListener('click',async()=>{button.disabled=true;await fetch('/api/enrich/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({retry_failed:true})});refresh()});refresh();

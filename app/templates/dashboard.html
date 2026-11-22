@@ -1,26 +1,6 @@
-{% extends 'base.html' %}{% block title %}Tableau de bord · IAQuote{% endblock %}
-{% block content %}
-<section class="hero"><div><span class="eyebrow">PILOTAGE</span><h1>Tableau de bord</h1><p>Vue réelle du catalogue, des fiches vérifiées et des devis.</p></div><a class="button primary" href="{{ url_for('quote_new') }}">Nouveau devis</a></section>
-<div class="stats-grid">
-  <article class="stat"><span>Produits</span><strong>{{ stats.total }}</strong><small>références SQLite</small></article>
-  <article class="stat"><span>Fiches vérifiées</span><strong>{{ stats.verified }}</strong><small>{{ stats.coverage }} % du catalogue</small></article>
-  <article class="stat"><span>À traiter</span><strong>{{ stats.missing }}</strong><small>sans fiche enregistrée</small></article>
-  <article class="stat"><span>Échecs</span><strong>{{ stats.failed }}</strong><small>relançables automatiquement</small></article>
-</div>
-<div class="two-col">
-  <section class="panel"><div class="panel-head"><h2>Dernier enrichissement</h2><a href="{{ url_for('enrichment') }}">Ouvrir</a></div>
-  {% if job %}
-    {% set pct = (job.processed / job.total * 100) if job.total else 100 %}
-    <div class="progress"><span style="width:{{ pct }}%"></span></div>
-    <p><strong>{{ job.processed }} / {{ job.total }}</strong> · {{ '%.1f'|format(pct) }} % · {{ job.status }}</p>
-    <div class="chips"><span>{{ job.succeeded }} vérifiés</span><span>{{ job.failed }} échecs</span><span>{{ job.skipped }} ignorés</span></div>
-  {% else %}<div class="empty">Aucun traitement lancé.</div>{% endif %}
-  </section>
-  <section class="panel"><div class="panel-head"><h2>Devis récents</h2><a href="{{ url_for('quotes') }}">Tout voir</a></div>
-  {% if quotes %}<div class="list">{% for q in quotes %}<a href="{{ url_for('quote_detail', quote_id=q.id) }}"><span><strong>{{ q.quote_number }}</strong><small>{{ q.customer_name or 'Client non renseigné' }}</small></span><b>{{ '%.2f'|format(q.total) }} €</b></a>{% endfor %}</div>{% else %}<div class="empty">Aucun devis.</div>{% endif %}
-  </section>
-</div>
-<section class="panel"><div class="panel-head"><h2>Activité récente</h2><a href="{{ url_for('history') }}">Historique</a></div>
-{% if events %}<div class="timeline">{% for e in events %}<div><span></span><p><strong>{{ e.message }}</strong><small>{{ e.created_at }}</small></p></div>{% endfor %}</div>{% else %}<div class="empty">Aucune activité.</div>{% endif %}
-</section>
+{% extends 'base.html' %}{% block title %}Tableau de bord · IAQuote{% endblock %}{% block content %}
+<section class="hero"><div><span class="eyebrow">PILOTAGE</span><h1>Votre catalogue, prêt pour des devis fiables</h1><p>Importez les références, vérifiez leurs fiches techniques, puis créez vos devis.</p></div><a class="button" href="{{ url_for('quote_page') }}">Créer un devis</a></section>
+<section class="grid stats"><article><span>Articles</span><strong>{{ stats.total }}</strong></article><article><span>Vérifiés</span><strong>{{ stats.verified }}</strong></article><article><span>À contrôler</span><strong>{{ stats.review }}</strong></article><article><span>Restants</span><strong>{{ stats.remaining }}</strong></article></section>
+<section class="grid two"><article class="panel"><h2>Derniers articles</h2>{% for p in products %}<div class="row"><div><strong>{{ p.code }}</strong><small>{{ p.designation }}</small></div><span class="pill {{ p.enrichment_status or 'pending' }}">{{ p.enrichment_status or 'à enrichir' }}</span></div>{% else %}<p class="muted">Importez un catalogue CSV pour commencer.</p>{% endfor %}</article>
+<article class="panel"><h2>Derniers devis</h2>{% for q in quotes %}<div class="row"><div><strong>Devis #{{ q.id }}</strong><small>{{ q.customer_name or 'Sans client' }}</small></div><span>{{ '%.2f'|format(q.total) }} €</span></div>{% else %}<p class="muted">Aucun devis pour le moment.</p>{% endfor %}</article></section>
 {% endblock %}

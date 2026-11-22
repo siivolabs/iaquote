@@ -1,8 +1,7 @@
 .git
 .github
 .pytest_cache
-.venv
 __pycache__
-tests
-*.sqlite*
-.env
+*.pyc
+*.sqlite
+.venv

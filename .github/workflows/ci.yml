@@ -14,6 +14,25 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements-dev.txt
-      - run: pytest
-      - run: docker build -t iaquote:test .
+      - name: Install project and test dependencies
+        run: python -m pip install -r requirements-dev.txt -e .
+      - name: Verify package import outside repository root
+        run: cd /tmp && python -c "from app import create_app; assert callable(create_app)"
+      - name: Run tests
+        env:
+          START_BACKGROUND_WORKER: "0"
+        run: python -m pytest -q
+      - name: Compile Python sources
+        run: python -m compileall -q app tests asgi.py wsgi.py run.py
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: iaquote:ci

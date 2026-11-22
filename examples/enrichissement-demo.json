@@ -1,0 +1,8 @@
+{
+  "items": [
+    {"code":"DEMO-CPU-01","status":"verified","confidence":1.0,"specs":{"socket":"AM5","memory_type":"DDR5","tdp_w":105}},
+    {"code":"DEMO-MB-01","status":"verified","confidence":1.0,"specs":{"socket":"AM5","memory_type":"DDR5"}},
+    {"code":"DEMO-RAM-01","status":"verified","confidence":1.0,"specs":{"capacity_gb":32,"memory_type":"DDR5"}},
+    {"code":"DEMO-LAPTOP-01","status":"verified","confidence":1.0,"specs":{"screen_inches":15.6,"memory_gb":16}}
+  ]
+}

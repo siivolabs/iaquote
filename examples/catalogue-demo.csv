@@ -1,4 +1,5 @@
-code;designation;prix;stock
-DEMO-CPU-01;Processeur exemple 8 cœurs;299,90;4
-DEMO-RAM-01;Mémoire exemple 32 Go;89,90;12
-DEMO-SSD-01;SSD exemple 1 To;74,90;8
+code;designation;categorie;prix;stock
+DEMO-CPU-01;Processeur Démo 8 cœurs;Processeur;329,90;8
+DEMO-MB-01;Carte mère Démo AM5;Carte mère;189,90;5
+DEMO-RAM-01;Mémoire Démo 32 Go DDR5;Mémoire;119,90;12
+DEMO-LAPTOP-01;Portable Démo 15 pouces;Portable;999,00;3
