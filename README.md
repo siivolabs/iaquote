@@ -2,9 +2,11 @@
 
 IAQuote importe un catalogue CSV dans SQLite, enrichit chaque article à partir de son **code article**, puis n'autorise la création d'un devis qu'avec des fiches vérifiées.
 
-## Correctif GitHub Actions
+## Correctifs de compatibilité
 
-Cette archive corrige le blocage `ModuleNotFoundError: No module named 'app'` de quatre façons complémentaires :
+Cette archive corrige le blocage `sqlite3.OperationalError: no such column: i.id` rencontré avec les bases créées par V0.3.1. Le code n'utilise plus de colonne `id` dans `enrichment_job_items` : il s'appuie sur la clé historique `(job_id, product_code)`, y compris pendant l'exécution du worker.
+
+Elle conserve aussi le correctif `ModuleNotFoundError: No module named 'app'` de quatre façons complémentaires :
 
 1. `app/__init__.py` expose officiellement `create_app` ;
 2. le dépôt est un paquet Python installable avec `pyproject.toml` ;
@@ -12,6 +14,8 @@ Cette archive corrige le blocage `ModuleNotFoundError: No module named 'app'` de
 4. `pytest.ini` et `tests/conftest.py` garantissent aussi l'import depuis un checkout non installé.
 
 La CI vérifie explicitement `from app import create_app` depuis `/tmp`, hors de la racine du dépôt.
+
+Deux régressions HTTP ouvrent aussi une ancienne tâche V0.3.1 sur `/enrichment` et `/api/enrich/jobs/current`. Un troisième test exécute le worker sur la même table sans colonne `id`, et un quatrième vérifie qu'un catalogue SQLite existant de 291 produits reste intact au démarrage.
 
 ## Fonctions conservées
 
@@ -25,6 +29,7 @@ La CI vérifie explicitement `from app import create_app` depuis `/tmp`, hors de
 - migrations SQLite uniquement additives ;
 - interface sombre ;
 - Docker, Compose/Dockge et contrôle `/api/health`.
+- compatibilité en lecture et en traitement avec les anciennes tâches SQLite sans migration destructive.
 
 ## Développement et tests
 
@@ -74,7 +79,7 @@ git remote add origin git@github.com:siivolabs/iaquote.git
 git push -u origin main
 ```
 
-Dans un clone existant, copiez le **contenu** du dossier `iaquote/` à la racine, vérifiez `git diff`, puis committez et poussez.
+Dans un clone existant, remplacez le contenu suivi par Git avec le **contenu** du dossier `iaquote/`, puis committez et poussez l'ensemble. Aucun correctif de code séparé n'est nécessaire.
 
 ## Docker / Dockge
 
@@ -85,16 +90,22 @@ docker compose up -d --build
 docker compose exec iaquote python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8094/api/health').read().decode())"
 ```
 
+Pour Dockge, `docker-compose.yml` utilise directement l'image publiée. `compose.yaml` conserve en plus `build: .` pour un lancement local depuis le dépôt.
+
 Variables principales :
 
 ```env
 DATABASE_PATH=/data/devisia.sqlite
-CATALOG_SEARCH_BASE_URL=https://www.ldlc.com/recherche/{code}
+CATALOG_SEARCH_BASE_URL=https://catalogue.example/recherche/{code}
 ENRICHMENT_DELAY_SECONDS=2.5
 HTTP_TIMEOUT=20
 ```
 
-**Conservez le volume `iaquote_data`** lors d'une mise à niveau. Le démarrage n'efface aucune table et n'exécute aucune migration destructive.
+Remplacez le domaine d'exemple par l'endpoint de recherche directe déjà configuré dans Dockge. Le marqueur `{code}` est obligatoire dans le modèle recommandé.
+
+**Conservez le volume `iaquote_data`** lors d'une mise à niveau. Le démarrage n'efface aucune table et n'exécute aucune migration destructive. Les 291 produits et les anciennes tâches restent dans le même fichier `/data/devisia.sqlite`.
+
+Le workflow CI teste le paquet et l'image, puis publie `ghcr.io/siivolabs/devisia:latest` uniquement pour un `push` sur `main`. Les pull requests construisent l'image sans la publier.
 
 ## Test réseau facultatif sur le NAS
 

@@ -4,36 +4,38 @@ Date : 22 novembre 2026
 
 ## Incident corrigé
 
-L'import `from app import create_app` est désormais supporté depuis :
+La base SQLite créée par V0.3.1 possède une table `enrichment_job_items` identifiée par la clé composée `(job_id, product_code)` et sans colonne `id`. V0.3.2 utilisait pourtant `i.id` dans `get_bulk_job()` et dans le worker, ce qui provoquait :
 
-- la racine d'un checkout Git ;
-- le lanceur `pytest` ;
-- `python -m pytest` ;
-- un emplacement extérieur au dépôt après installation du paquet.
+- une réponse HTTP 500 sur `/api/enrich/jobs/current` ;
+- l'échec de la page `/enrichment` ;
+- l'impossibilité de reprendre certaines anciennes tâches.
 
-Le correctif repose sur `app/__init__.py`, `pyproject.toml`, `pytest.ini`, le bootstrap de `tests/conftest.py` et l'installation editable dans `.github/workflows/ci.yml`.
+La livraison ne dépend plus de cette colonne. La lecture, le tri et les mises à jour utilisent uniquement les colonnes présentes dans les deux schémas. Aucune reconstruction de table et aucune suppression de données ne sont exécutées.
 
 ## Contrôles exécutés
 
-- 30 tests de régression : réussis ;
+- 34 tests de régression : réussis ;
+- page `/enrichment` avec une ancienne tâche sans colonne `id` : HTTP 200 ;
+- API `/api/enrich/jobs/current` sur la même base : HTTP 200 et ancien élément retourné ;
+- reprise complète du worker sur le schéma V0.3.1 : réussie ;
+- démarrage sur un catalogue existant de 291 produits : 291 produits et ancienne erreur conservés ;
 - compilation de tous les fichiers Python : réussie ;
 - construction du wheel Python : réussie ;
-- import du wheel depuis `/tmp` : réussi ;
-- compilation syntaxique des 8 modèles Jinja : réussie ;
-- lecture des exemples JSON et des fichiers YAML : réussie ;
-- présence de `app/__init__.py` et des modèles dans le wheel : vérifiée ;
-- URL directe `904240` : `https://www.ldlc.com/recherche/904240` ;
-- absence de base SQLite dans la livraison : vérifiée ;
-- absence de commande supprimant la base ou le volume : vérifiée.
+- modèles Jinja et feuille de style sombre inclus dans le wheel ;
+- import installable `from app import create_app` conservé ;
+- workflow GitHub Actions : tests avant construction, publication GHCR seulement sur `push` vers `main` ;
+- absence de base SQLite dans la livraison ;
+- absence de commande supprimant la base ou le volume ;
+- absence du nom de l'enseigne dans les fichiers publiés.
 
 ## Périmètre réseau
 
-Le test déterministe ne contacte pas le catalogue externe. Le contrôle facultatif de dix références se lance sur le NAS avec :
+Les tests déterministes ne contactent aucun catalogue externe. La recherche directe par code est fournie par `CATALOG_SEARCH_BASE_URL` et requiert le marqueur `{code}` dans le modèle recommandé. Le contrôle facultatif de dix références se lance sur le NAS avec :
 
 ```bash
 RUN_NETWORK_TESTS=1 python scripts/test_direct_catalog_search.py
 ```
 
-## Limite de l'environnement de fabrication
+## Environnement de validation
 
-Le miroir de paquets Python de l'environnement de fabrication ne proposait pas Flask. Les routes ont donc été exercées avec un adaptateur de validation placé hors de l'archive ; cet adaptateur n'est pas livré. Le workflow GitHub installe Flask réel avant de relancer les mêmes tests et de construire l'image Docker. Le statut GitHub Actions ne peut être observé qu'après publication dans le dépôt.
+Le miroir de paquets de l'environnement de fabrication ne proposait pas Flask. La suite complète a donc été exécutée avec un petit adaptateur compatible Flask placé hors du dépôt et absent de l'archive. Les 34 tests, y compris les routes, les modèles Jinja, les imports CSV, les devis et les régressions SQLite, ont réussi. GitHub Actions réinstalle Flask réel depuis `requirements-dev.txt` avant d'exécuter la même commande `python -m pytest -q`.

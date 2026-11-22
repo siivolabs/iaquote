@@ -17,19 +17,21 @@ from bs4 import BeautifulSoup
 
 from .db import transaction, utcnow
 
-DEFAULT_SEARCH_URL = "https://www.ldlc.com/recherche/{code}"
+DEFAULT_SEARCH_URL = ""
 ACTIVE = ("pending", "running", "blocked")
 
 
 def direct_search_url(code: str, base_url: str | None = None) -> str:
     template = base_url or os.getenv("CATALOG_SEARCH_BASE_URL", DEFAULT_SEARCH_URL)
+    if not template:
+        raise RuntimeError("CATALOG_SEARCH_BASE_URL doit être configurée avec le marqueur {code}.")
     encoded = quote(str(code).strip(), safe="")
     return template.replace("{code}", encoded) if "{code}" in template else template.rstrip("/") + "/" + encoded
 
 
 def _words(value: str) -> list[str]:
     folded = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode().lower()
-    return [w for w in re.findall(r"[a-z0-9]+", folded) if len(w) > 1 and w not in {"ldlc", "produit", "fiche"}]
+    return [w for w in re.findall(r"[a-z0-9]+", folded) if len(w) > 1 and w not in {"produit", "fiche"}]
 
 
 def title_match_score(designation: str, title: str) -> float:
@@ -230,16 +232,18 @@ def run_bulk_job(job_id: int, db_path: str | None = None,
     while True:
         with transaction(db_path) as con:
             item = con.execute(
-                """SELECT i.id,i.product_code,p.designation FROM enrichment_job_items i
+                """SELECT i.product_code,p.designation FROM enrichment_job_items i
                    JOIN products p ON p.code=i.product_code
-                   WHERE i.job_id=? AND i.status='pending' ORDER BY i.id LIMIT 1""", (job_id,),
+                   WHERE i.job_id=? AND i.status='pending' ORDER BY i.product_code LIMIT 1""", (job_id,),
             ).fetchone()
             if not item:
                 _refresh_job(con, job_id)
                 break
             con.execute(
-                "UPDATE enrichment_job_items SET status='running', attempts=attempts+1, started_at=? WHERE id=?",
-                (utcnow(), item["id"]),
+                """UPDATE enrichment_job_items
+                   SET status='running', attempts=attempts+1, started_at=?
+                   WHERE job_id=? AND product_code=?""",
+                (utcnow(), job_id, item["product_code"]),
             )
         status = "failed"
         error = None
@@ -252,8 +256,9 @@ def run_bulk_job(job_id: int, db_path: str | None = None,
             save_enrichment(item["product_code"], {"status": "failed", "error": error}, db_path)
         with transaction(db_path) as con:
             con.execute(
-                "UPDATE enrichment_job_items SET status=?, error=?, finished_at=? WHERE id=?",
-                (status, error, utcnow(), item["id"]),
+                """UPDATE enrichment_job_items SET status=?, error=?, finished_at=?
+                   WHERE job_id=? AND product_code=?""",
+                (status, error, utcnow(), job_id, item["product_code"]),
             )
             _refresh_job(con, job_id)
         if pause:
@@ -296,7 +301,7 @@ def get_bulk_job(job_id: int | None = None, db_path: str | None = None) -> dict[
             """SELECT i.*,p.designation,e.source_url,e.source_title,e.confidence
                FROM enrichment_job_items i JOIN products p ON p.code=i.product_code
                LEFT JOIN enrichments e ON e.product_code=i.product_code
-               WHERE i.job_id=? ORDER BY i.id DESC LIMIT 200""", (row["id"],)
+               WHERE i.job_id=? ORDER BY i.product_code DESC LIMIT 200""", (row["id"],)
         )]
     result["catalog"] = catalog_stats(db_path)
     result["percent"] = round((result["processed"] / result["total"] * 100), 1) if result["total"] else 0.0
