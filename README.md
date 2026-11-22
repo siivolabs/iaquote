@@ -53,16 +53,27 @@ Les autres colonnes reconnues sont documentées par le fichier synthétique `exa
 Toutes les adresses externes restent dans `.env`, jamais dans le code ou la documentation publiée.
 
 ```dotenv
-TECHNICAL_SEARCH_URL=<modele-https-contenant-{query}>
 TECHNICAL_ALLOWED_HOSTS=<domaine-autorise>
 TECHNICAL_PRODUCT_PATH_MARKER=/fiche/
 TECHNICAL_LINK_SELECTOR=a[href]
+
+# Recherche principale HTML, API JSON ou liste de replis (facultatifs).
+TECHNICAL_SEARCH_URL=<modele-https-contenant-{query}>
+TECHNICAL_SEARCH_API_URL=
+TECHNICAL_SEARCH_FALLBACK_URLS=
+TECHNICAL_SEARCH_ALLOWED_HOSTS=
+
+# Repli indépendant intégré ; désactivez-le si une recherche privée est imposée.
+TECHNICAL_DEFAULT_DISCOVERY=true
+TECHNICAL_SEARCH_STOP_SCORE=0.72
+TECHNICAL_SEARCH_DELAY=2.5
+TECHNICAL_SEARCH_TIMEOUT=25
 TECHNICAL_REQUEST_DELAY=2.5
 TECHNICAL_TIMEOUT=25
 AUTO_ENRICH_ON_IMPORT=true
 ```
 
-`TECHNICAL_ALLOWED_HOSTS` accepte une liste séparée par des virgules. L'application refuse les schémas non HTTPS, les domaines absents de cette liste et les redirections vers un domaine non autorisé.
+Les modèles de recherche acceptent `{query}` (encodé), `{domain}` (premier domaine autorisé) et `{raw_query}` (brut). `TECHNICAL_ALLOWED_HOSTS` et `TECHNICAL_SEARCH_ALLOWED_HOSTS` acceptent des listes séparées par des virgules. L’application refuse les schémas non HTTPS, les domaines absents des listes autorisées et les redirections non autorisées. Les fiches retenues doivent aussi correspondre à `TECHNICAL_PRODUCT_PATH_MARKER`.
 
 ## Enrichissement automatique d'un catalogue complet
 
@@ -76,7 +87,7 @@ AUTO_ENRICH_ON_IMPORT=true
 ## Déploiement GitHub, GHCR et Dockge
 
 1. Créez un dépôt GitHub vide nommé `iaquote`.
-2. Décompressez l'archive et publiez son contenu sur la branche `main`.
+2. Décompressez l’archive puis publiez le contenu du dossier `iaquote/` à la racine de la branche `main`.
 3. L'action `.github/workflows/container.yml` exécute les tests puis publie `ghcr.io/<compte>/devisia:latest`.
 4. Dans `compose.dockge.yml`, remplacez `VOTRE_COMPTE` par le propriétaire du dépôt.
 5. Dans Dockge, créez la stack avec le contenu de `compose.dockge.yml` et un fichier `.env` privé adapté au NAS.

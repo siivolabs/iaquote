@@ -5,13 +5,14 @@ import threading
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
 from .db import product_with_enrichment, transaction, utcnow
 
+CORRECTIVE_VERSION = "0.3.1"
 _LOCK = threading.Lock()
 _LAST_REQUEST = 0.0
 _WORKER_GUARD = threading.Lock()
@@ -19,16 +20,42 @@ _WORKER_THREAD = None
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
     "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.7",
-    "Accept": "text/html,application/xhtml+xml",
+    "Accept": "text/html,application/xhtml+xml,application/json",
 }
+_DEFAULT_DISCOVERY_TEMPLATE = (
+    "https://html.duckduckgo.com/html/?q={query}+site%3A{domain}"
+)
+
+
+def _env_enabled(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return bool(default)
+    return value.strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+
+def _csv_env(name, default=""):
+    return {
+        value.strip().lower()
+        for value in os.getenv(name, default).replace("\n", ",").split(",")
+        if value.strip()
+    }
 
 
 def _allowed_hosts():
-    return {
-        host.strip().lower()
-        for host in os.getenv("TECHNICAL_ALLOWED_HOSTS", "").split(",")
-        if host.strip()
-    }
+    return _csv_env("TECHNICAL_ALLOWED_HOSTS")
+
+
+def _search_hosts():
+    return _csv_env(
+        "TECHNICAL_SEARCH_ALLOWED_HOSTS",
+        "html.duckduckgo.com,duckduckgo.com",
+    ) | _allowed_hosts()
+
+
+def _host_is_allowed(host, allowed):
+    host = (host or "").lower()
+    return any(host == item or host.endswith("." + item) for item in allowed)
 
 
 def _safe_source_url(url, require_product=False):
@@ -38,8 +65,10 @@ def _safe_source_url(url, require_product=False):
     if parsed.scheme != "https" or not host:
         raise ValueError("Seules les adresses HTTPS sont autorisées pour la source technique.")
     if not allowed:
-        raise ValueError("Configurez TECHNICAL_ALLOWED_HOSTS avant d'utiliser l'enrichissement réseau.")
-    if not any(host == item or host.endswith("." + item) for item in allowed):
+        raise ValueError(
+            "Configurez TECHNICAL_ALLOWED_HOSTS avant d'utiliser l'enrichissement réseau."
+        )
+    if not _host_is_allowed(host, allowed):
         raise ValueError("Le domaine de la source technique n'est pas autorisé par la configuration.")
     marker = os.getenv("TECHNICAL_PRODUCT_PATH_MARKER", "/fiche/").strip()
     if require_product and marker and marker not in parsed.path:
@@ -47,20 +76,56 @@ def _safe_source_url(url, require_product=False):
     return url
 
 
-def _get(url, require_product=False):
+def _safe_search_url(url):
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        raise ValueError("Seules les adresses HTTPS sont autorisées pour la recherche technique.")
+    if not _host_is_allowed(host, _search_hosts()):
+        raise ValueError("Le domaine du moteur de recherche n'est pas autorisé.")
+    return url
+
+
+def _throttled_get(url, validator, delay_name, timeout_name):
     global _LAST_REQUEST
-    _safe_source_url(url, require_product=require_product)
-    delay = float(os.getenv("TECHNICAL_REQUEST_DELAY", "2.5"))
-    timeout = float(os.getenv("TECHNICAL_TIMEOUT", "25"))
+    validator(url)
+    delay = float(os.getenv(delay_name, "2.5"))
+    timeout = float(os.getenv(timeout_name, "25"))
     with _LOCK:
         wait = delay - (time.monotonic() - _LAST_REQUEST)
         if wait > 0:
             time.sleep(wait)
-        response = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=timeout,
+            allow_redirects=True,
+        )
         _LAST_REQUEST = time.monotonic()
     response.raise_for_status()
-    _safe_source_url(response.url, require_product=require_product)
+    validator(response.url)
     return response
+
+
+def _get(url, require_product=False):
+    def validate(value):
+        return _safe_source_url(value, require_product=require_product)
+
+    return _throttled_get(
+        url,
+        validate,
+        "TECHNICAL_REQUEST_DELAY",
+        "TECHNICAL_TIMEOUT",
+    )
+
+
+def _get_search(url):
+    return _throttled_get(
+        url,
+        _safe_search_url,
+        "TECHNICAL_SEARCH_DELAY",
+        "TECHNICAL_SEARCH_TIMEOUT",
+    )
 
 
 def _clean(value):
@@ -70,51 +135,158 @@ def _clean(value):
 def _score_title(designation, title, brand=""):
     a, b = designation.lower(), title.lower()
     ratio = SequenceMatcher(None, a, b).ratio()
-    tokens = {x for x in re.findall(r"[a-z0-9]+", a) if len(x) > 2}
+    tokens = {value for value in re.findall(r"[a-z0-9]+", a) if len(value) > 2}
     title_tokens = set(re.findall(r"[a-z0-9]+", b))
     overlap = len(tokens & title_tokens) / max(1, len(tokens))
     score = 0.45 * ratio + 0.55 * overlap
     if brand and brand.lower() in b:
         score += 0.05
-    if any(x in b for x in ("occasion", "reconditionné", "plus en vente")):
+    if any(value in b for value in ("occasion", "reconditionné", "plus en vente")):
         score -= 0.25
     return max(0.0, min(1.0, score))
 
 
-def _search_url(designation):
-    template = os.getenv("TECHNICAL_SEARCH_URL", "").strip()
-    if not template:
-        raise RuntimeError("La recherche automatique n'est pas configurée. Saisissez une adresse de fiche exacte.")
+def _primary_domain():
+    hosts = sorted(_allowed_hosts())
+    return hosts[0] if hosts else ""
+
+
+def _format_search_url(template, designation):
     encoded = quote_plus(designation)
+    domain = quote_plus(_primary_domain())
     try:
-        url = template.format(query=encoded)
+        url = template.format(
+            query=encoded,
+            domain=domain,
+            raw_query=designation,
+        )
     except (KeyError, ValueError) as exc:
-        raise RuntimeError("TECHNICAL_SEARCH_URL doit utiliser le marqueur {query}.") from exc
-    return _safe_source_url(url)
+        raise RuntimeError(
+            "L'adresse de recherche doit utiliser {query} et peut utiliser {domain}."
+        ) from exc
+    return _safe_search_url(url)
+
+
+def _search_templates():
+    templates = []
+    for name in ("TECHNICAL_SEARCH_API_URL", "TECHNICAL_SEARCH_URL"):
+        value = os.getenv(name, "").strip()
+        if value:
+            templates.append(value)
+    templates.extend(
+        value.strip()
+        for value in os.getenv("TECHNICAL_SEARCH_FALLBACK_URLS", "").splitlines()
+        if value.strip()
+    )
+    if _env_enabled("TECHNICAL_DEFAULT_DISCOVERY", True):
+        templates.append(_DEFAULT_DISCOVERY_TEMPLATE)
+    return list(dict.fromkeys(templates))
+
+
+def technical_source_ready():
+    """Retourne vrai si une source et au moins une méthode de découverte sont utilisables."""
+    return bool(_allowed_hosts() and _search_templates())
+
+
+def _decode_result_url(href, base_url):
+    absolute = urljoin(base_url, href)
+    parsed = urlparse(absolute)
+    values = parse_qs(parsed.query)
+    for key in ("uddg", "url", "u", "target", "dest", "destination"):
+        if values.get(key):
+            candidate = unquote(values[key][0])
+            if candidate.startswith("http://") or candidate.startswith("https://"):
+                return candidate
+    return absolute
+
+
+def _add_candidate(candidates, seen, url, title, designation, brand):
+    if not url or not title:
+        return
+    try:
+        url = _safe_source_url(url, require_product=True)
+    except ValueError:
+        return
+    if url in seen:
+        return
+    seen.add(url)
+    title = _clean(title)
+    if not title:
+        return
+    candidates.append(
+        {
+            "url": url,
+            "title": title,
+            "score": _score_title(designation, title, brand),
+        }
+    )
+
+
+def _json_result_rows(payload):
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict):
+                yield item
+        return
+    if not isinstance(payload, dict):
+        return
+    for key in ("results", "items", "webPages", "data"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    yield item
+        elif isinstance(value, dict):
+            nested = value.get("value") or value.get("results") or value.get("items")
+            if isinstance(nested, list):
+                for item in nested:
+                    if isinstance(item, dict):
+                        yield item
+
+
+def _candidates_from_json(payload, designation, brand, seen, candidates):
+    for item in _json_result_rows(payload):
+        url = item.get("url") or item.get("link") or item.get("href")
+        title = item.get("title") or item.get("name") or item.get("text")
+        _add_candidate(candidates, seen, url, title, designation, brand)
+
+
+def _candidates_from_html(response, designation, brand, seen, candidates):
+    soup = BeautifulSoup(response.text, "html.parser")
+    selector = os.getenv("TECHNICAL_LINK_SELECTOR", "a[href]").strip() or "a[href]"
+    for anchor in soup.select(selector):
+        href = _decode_result_url(anchor.get("href", ""), response.url)
+        title = anchor.get("title") or anchor.get_text(" ", strip=True)
+        _add_candidate(candidates, seen, href, title, designation, brand)
 
 
 def search_candidates(designation, brand=""):
-    response = _get(_search_url(designation))
-    soup = BeautifulSoup(response.text, "html.parser")
-    marker = os.getenv("TECHNICAL_PRODUCT_PATH_MARKER", "/fiche/").strip()
-    selector = os.getenv("TECHNICAL_LINK_SELECTOR", "a[href]").strip() or "a[href]"
-    seen, candidates = set(), []
-    for anchor in soup.select(selector):
-        href = urljoin(response.url, anchor.get("href", ""))
-        if marker and marker not in urlparse(href).path:
-            continue
+    """Découvre des fiches via JSON ou HTML, avec repli indépendant du moteur du site."""
+    if not technical_source_ready():
+        raise RuntimeError(
+            "La recherche automatique n'est pas configurée. Configurez au moins les domaines sources autorisés."
+        )
+    seen, candidates, errors = set(), [], []
+    for template in _search_templates():
         try:
-            href = _safe_source_url(href, require_product=True)
-        except ValueError:
+            response = _get_search(_format_search_url(template, designation))
+            content_type = response.headers.get("content-type", "").lower()
+            if "json" in content_type or response.text.lstrip().startswith(("{", "[")):
+                _candidates_from_json(response.json(), designation, brand, seen, candidates)
+            else:
+                _candidates_from_html(response, designation, brand, seen, candidates)
+        except Exception as exc:
+            errors.append(str(exc))
             continue
-        if href in seen:
-            continue
-        seen.add(href)
-        title = _clean(anchor.get("title") or anchor.get_text(" ", strip=True))
-        if not title:
-            continue
-        candidates.append({"url": href, "title": title, "score": _score_title(designation, title, brand)})
-    return sorted(candidates, key=lambda x: x["score"], reverse=True)[:8]
+        stop_score = float(os.getenv("TECHNICAL_SEARCH_STOP_SCORE", "0.72"))
+        if candidates and max(item["score"] for item in candidates) >= stop_score:
+            break
+    if not candidates and errors:
+        raise RuntimeError(
+            "Aucune fiche technique trouvée automatiquement. "
+            "Les moteurs interrogés n'ont fourni aucun résultat exploitable."
+        )
+    return sorted(candidates, key=lambda item: item["score"], reverse=True)[:8]
 
 
 def _pairs_from_soup(soup):
@@ -142,7 +314,7 @@ def _number(text):
 
 
 def normalize_specs(pairs, full_text=""):
-    lower = {k.lower(): v for k, v in pairs.items()}
+    lower = {key.lower(): value for key, value in pairs.items()}
     specs = {"technical": pairs}
 
     def find(*labels):
@@ -176,8 +348,7 @@ def normalize_specs(pairs, full_text=""):
         "cooler_tdp_w": ("tdp maximal", "tdp max"),
     }
     for key, labels in numeric.items():
-        value = find(*labels)
-        number = _number(value)
+        number = _number(find(*labels))
         if number is not None:
             specs[key] = number
 
@@ -201,7 +372,11 @@ def parse_product_page(html, url, designation, brand=""):
     text = _clean(soup.get_text(" ", strip=True))
     confidence = _score_title(designation, title, brand)
     status = "verified" if confidence >= 0.76 and pairs else "review"
-    note = "Correspondance forte et caractéristiques extraites" if status == "verified" else "Contrôle humain requis : correspondance ou caractéristiques incomplètes"
+    note = (
+        "Correspondance forte et caractéristiques extraites"
+        if status == "verified"
+        else "Contrôle humain requis : correspondance ou caractéristiques incomplètes"
+    )
     return {
         "source_url": url,
         "source_title": title,
@@ -214,55 +389,85 @@ def parse_product_page(html, url, designation, brand=""):
 
 
 def save_enrichment(code, result, db_path=None):
+    """Enregistre sans supposer l'ordre des colonnes de la base existante."""
+    values = {
+        "product_code": code,
+        "source_url": result["source_url"],
+        "source_title": result.get("source_title"),
+        "status": result.get("status", "review"),
+        "confidence": result.get("confidence", 0),
+        "specs_json": json.dumps(result.get("specs", {}), ensure_ascii=False),
+        "raw_summary": result.get("raw_summary"),
+        "validation_note": result.get("validation_note"),
+        "checked_at": utcnow(),
+        "updated_at": utcnow(),
+        "verified_at": utcnow(),
+    }
     with transaction(db_path) as con:
-        con.execute(
-            """INSERT INTO enrichments(product_code, source_url, source_title, status, confidence,
-                   specs_json, raw_summary, validation_note, fetched_at)
-               VALUES(?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(product_code) DO UPDATE SET source_url=excluded.source_url,
-                   source_title=excluded.source_title, status=excluded.status,
-                   confidence=excluded.confidence, specs_json=excluded.specs_json,
-                   raw_summary=excluded.raw_summary, validation_note=excluded.validation_note,
-                   fetched_at=excluded.fetched_at""",
-            (
-                code,
-                result.get("source_url"),
-                result.get("source_title"),
-                result["status"],
-                result.get("confidence", 0),
-                json.dumps(result.get("specs", {}), ensure_ascii=False),
-                result.get("raw_summary", ""),
-                result.get("validation_note", ""),
-                utcnow(),
-            ),
+        columns = {
+            row["name"] if hasattr(row, "keys") else row[1]
+            for row in con.execute("PRAGMA table_info(enrichments)").fetchall()
+        }
+        selected = [name for name in values if name in columns]
+        if "product_code" not in selected:
+            raise RuntimeError("Schéma de la table enrichments incompatible.")
+        placeholders = ",".join("?" for _ in selected)
+        updates = ",".join(
+            f"{name}=excluded.{name}" for name in selected if name != "product_code"
         )
+        sql = (
+            f"INSERT INTO enrichments({','.join(selected)}) VALUES({placeholders}) "
+            f"ON CONFLICT(product_code) DO UPDATE SET {updates}"
+        )
+        con.execute(sql, [values[name] for name in selected])
 
 
 def enrich_product(code, source_url=None, force=False, db_path=None):
     with transaction(db_path) as con:
         product = product_with_enrichment(con, code)
     if not product:
-        raise KeyError(f"Référence inconnue : {code}")
-    if product.get("enrichment_status") in {"verified", "review"} and not force and not source_url:
+        raise KeyError(f"Produit introuvable : {code}")
+    if (
+        product.get("enrichment_status") in {"verified", "review"}
+        and not force
+        and not source_url
+    ):
         return product
 
+    designation = product.get("designation") or product.get("name") or code
+    brand = product.get("brand") or product.get("manufacturer") or ""
     if source_url:
-        url = _safe_source_url(source_url, require_product=True)
+        urls = [{"url": _safe_source_url(source_url, require_product=True), "score": 1.0}]
     else:
-        candidates = search_candidates(product["designation"], product.get("brand", ""))
-        if not candidates:
-            raise RuntimeError("Aucune fiche technique trouvée automatiquement. Saisissez l'adresse exacte de la fiche.")
-        url = candidates[0]["url"]
-    response = _get(url, require_product=True)
-    result = parse_product_page(response.text, response.url, product["designation"], product.get("brand", ""))
-    save_enrichment(code, result, db_path)
+        urls = search_candidates(designation, brand)
+    if not urls:
+        raise RuntimeError(
+            "Aucune fiche technique trouvée automatiquement. Saisissez l'adresse exacte de la fiche."
+        )
+
+    best, errors = None, []
+    for candidate in urls[:4]:
+        try:
+            response = _get(candidate["url"], require_product=True)
+            result = parse_product_page(response.text, response.url, designation, brand)
+            result["confidence"] = round(
+                max(result.get("confidence", 0), candidate.get("score", 0)), 3
+            )
+            if result["confidence"] >= 0.76 and result["specs"].get("technical"):
+                result["status"] = "verified"
+                result["validation_note"] = "Correspondance forte et caractéristiques extraites"
+            if best is None or result["confidence"] > best["confidence"]:
+                best = result
+            if result["status"] == "verified":
+                break
+        except Exception as exc:
+            errors.append(str(exc))
+    if best is None:
+        detail = errors[-1] if errors else "aucun résultat exploitable"
+        raise RuntimeError(f"Échec de lecture des fiches candidates : {detail}")
+    save_enrichment(code, best, db_path)
     with transaction(db_path) as con:
         return product_with_enrichment(con, code)
-
-
-def technical_source_ready():
-    """Indique si la recherche automatique peut réellement fonctionner."""
-    return bool(os.getenv("TECHNICAL_SEARCH_URL", "").strip() and _allowed_hosts())
 
 
 def _job_dict(row):
@@ -273,16 +478,77 @@ def _job_dict(row):
     total = int(item.get("total") or 0)
     processed = int(item.get("processed") or 0)
     item["remaining"] = max(0, total - processed)
-    item["progress_percent"] = round((processed / total * 100) if total else 100, 1)
+    item["progress_percent"] = round((processed / total * 100) if total else 0, 1)
     return item
+
+
+def _catalog_job(con):
+    total = con.execute("SELECT COUNT(*) FROM products").fetchone()[0]
+    rows = con.execute(
+        "SELECT status, COUNT(*) AS count FROM enrichments GROUP BY status"
+    ).fetchall()
+    counts = {row["status"]: row["count"] for row in rows}
+    verified = int(counts.get("verified", 0))
+    review = int(counts.get("review", 0))
+    failed_row = con.execute(
+        """SELECT COUNT(DISTINCT ji.product_code)
+           FROM enrichment_job_items ji
+           WHERE ji.status='failed'
+             AND NOT EXISTS (
+                 SELECT 1 FROM enrichments e WHERE e.product_code=ji.product_code
+             )"""
+    ).fetchone()
+    failed = int(failed_row[0] or 0)
+    active = con.execute(
+        """SELECT * FROM enrichment_jobs
+           WHERE status IN ('queued','running','blocked','cancelling') AND total>0
+           ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END, id
+           LIMIT 1"""
+    ).fetchone()
+    if active:
+        return _job_dict(active)
+    meaningful = con.execute(
+        "SELECT * FROM enrichment_jobs WHERE total>0 ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    last = dict(meaningful) if meaningful else {}
+    successful = verified + review
+    if total == 0:
+        status = "completed"
+    elif successful >= total:
+        status = "completed"
+    elif failed:
+        status = "completed_with_errors"
+    elif last.get("status") in {"blocked", "cancelled"}:
+        status = last["status"]
+    else:
+        status = "queued"
+    return {
+        "id": last.get("id"),
+        "created_at": last.get("created_at"),
+        "started_at": last.get("started_at"),
+        "finished_at": last.get("finished_at"),
+        "status": status,
+        "trigger": "catalog",
+        "force": False,
+        "total": total,
+        "processed": successful,
+        "attempted": successful + failed,
+        "verified": verified,
+        "review": review,
+        "failed": failed,
+        "cancelled": 0,
+        "remaining": max(0, total - successful),
+        "last_error": last.get("last_error"),
+        "progress_percent": round((successful / total * 100) if total else 0, 1),
+        "catalog_summary": True,
+    }
 
 
 def get_bulk_job(job_id=None, db_path=None):
     with transaction(db_path) as con:
         if job_id is None:
-            row = con.execute("SELECT * FROM enrichment_jobs ORDER BY id DESC LIMIT 1").fetchone()
-        else:
-            row = con.execute("SELECT * FROM enrichment_jobs WHERE id=?", (job_id,)).fetchone()
+            return _catalog_job(con)
+        row = con.execute("SELECT * FROM enrichment_jobs WHERE id=?", (job_id,)).fetchone()
     return _job_dict(row)
 
 
@@ -318,36 +584,71 @@ def _eligible_codes(con, codes=None, force=False):
     return [row[0] for row in rows]
 
 
+def _matching_active_job(con, codes=None):
+    if codes is None:
+        return con.execute(
+            """SELECT * FROM enrichment_jobs
+               WHERE status IN ('queued','running','blocked','cancelling') AND total>0
+               ORDER BY id LIMIT 1"""
+        ).fetchone()
+    clean = sorted({str(code).strip() for code in codes if str(code).strip()})
+    if not clean:
+        return None
+    placeholders = ",".join("?" for _ in clean)
+    return con.execute(
+        f"""SELECT j.* FROM enrichment_jobs j
+            JOIN enrichment_job_items ji ON ji.job_id=j.id
+            WHERE j.status IN ('queued','running','blocked','cancelling')
+              AND ji.product_code IN ({placeholders})
+            ORDER BY j.id LIMIT 1""",
+        clean,
+    ).fetchone()
+
+
 def queue_bulk_enrichment(codes=None, force=False, trigger="manual", db_path=None, launch=True):
-    """Crée une tâche persistante et la traite en arrière-plan, un produit à la fois."""
+    """Crée une tâche non vide ou reprend la tâche persistante qui possède déjà les produits."""
     ready = technical_source_ready()
     created_at = utcnow()
+    job_id = None
+    status = None
     with transaction(db_path) as con:
-        selected = _eligible_codes(con, codes, force)
-        status = "queued" if ready and selected else "blocked" if selected else "completed"
-        last_error = None
-        if status == "blocked":
-            last_error = "La recherche technique automatique n'est pas configurée."
-        cur = con.execute(
-            """INSERT INTO enrichment_jobs(
-                   created_at, finished_at, status, trigger, force, total, processed, last_error
-               ) VALUES(?,?,?,?,?,?,?,?)""",
-            (
-                created_at,
-                created_at if status == "completed" else None,
-                status,
-                trigger,
-                1 if force else 0,
-                len(selected),
-                0,
-                last_error,
-            ),
-        )
-        job_id = cur.lastrowid
-        con.executemany(
-            "INSERT INTO enrichment_job_items(job_id, product_code, status) VALUES(?,?,'queued')",
-            [(job_id, code) for code in selected],
-        )
+        active = _matching_active_job(con, codes)
+        if active:
+            job_id = active["id"]
+            status = active["status"]
+            if status == "blocked" and ready:
+                con.execute(
+                    "UPDATE enrichment_jobs SET status='queued', last_error=NULL WHERE id=?",
+                    (job_id,),
+                )
+                status = "queued"
+        else:
+            selected = _eligible_codes(con, codes, force)
+            if selected:
+                status = "queued" if ready else "blocked"
+                last_error = None if ready else "La recherche technique automatique n'est pas configurée."
+                cur = con.execute(
+                    """INSERT INTO enrichment_jobs(
+                           created_at, finished_at, status, trigger, force, total, processed, last_error
+                       ) VALUES(?,?,?,?,?,?,?,?)""",
+                    (
+                        created_at,
+                        None,
+                        status,
+                        trigger,
+                        1 if force else 0,
+                        len(selected),
+                        0,
+                        last_error,
+                    ),
+                )
+                job_id = cur.lastrowid
+                con.executemany(
+                    "INSERT INTO enrichment_job_items(job_id, product_code, status) VALUES(?,?,'queued')",
+                    [(job_id, code) for code in selected],
+                )
+    if job_id is None:
+        return get_bulk_job(None, db_path)
     if launch and status == "queued":
         _ensure_worker(db_path)
     return get_bulk_job(job_id, db_path)
@@ -391,13 +692,19 @@ def _finish_cancelled_job(con, job_id):
 
 def _process_job(job_id, db_path):
     with transaction(db_path) as con:
-        con.execute(
-            "UPDATE enrichment_jobs SET status='running', started_at=COALESCE(started_at, ?) WHERE id=?",
+        claimed = con.execute(
+            """UPDATE enrichment_jobs
+               SET status='running', started_at=COALESCE(started_at, ?)
+               WHERE id=? AND status='queued'""",
             (utcnow(), job_id),
         )
+        if claimed.rowcount != 1:
+            return
     while True:
         with transaction(db_path) as con:
-            job = con.execute("SELECT status, force FROM enrichment_jobs WHERE id=?", (job_id,)).fetchone()
+            job = con.execute(
+                "SELECT status, force FROM enrichment_jobs WHERE id=?", (job_id,)
+            ).fetchone()
             if not job or job["status"] in {"cancelling", "cancelled"}:
                 if job:
                     _finish_cancelled_job(con, job_id)
@@ -416,18 +723,23 @@ def _process_job(job_id, db_path):
                 )
                 return
             code = item["product_code"]
-            con.execute(
-                "UPDATE enrichment_job_items SET status='running' WHERE job_id=? AND product_code=?",
+            updated = con.execute(
+                """UPDATE enrichment_job_items SET status='running'
+                   WHERE job_id=? AND product_code=? AND status='queued'""",
                 (job_id, code),
             )
+            if updated.rowcount != 1:
+                continue
             force = bool(job["force"])
 
         item_status = "failed"
         error = None
         try:
             enriched = enrich_product(code, force=force, db_path=db_path)
-            item_status = "verified" if enriched.get("enrichment_status") == "verified" else "review"
-        except Exception as exc:  # L'échec d'un article ne doit jamais arrêter les 299 suivants.
+            item_status = (
+                "verified" if enriched.get("enrichment_status") == "verified" else "review"
+            )
+        except Exception as exc:
             error = str(exc)[:1000]
 
         with transaction(db_path) as con:
@@ -438,7 +750,10 @@ def _process_job(job_id, db_path):
                 (item_status, error, utcnow(), job_id, code),
             )
             if error:
-                con.execute("UPDATE enrichment_jobs SET last_error=? WHERE id=?", (error, job_id))
+                con.execute(
+                    "UPDATE enrichment_jobs SET last_error=? WHERE id=?",
+                    (error, job_id),
+                )
             _refresh_job_counts(con, job_id)
 
 
@@ -456,32 +771,25 @@ def _worker_loop(db_path):
     finally:
         with _WORKER_GUARD:
             _WORKER_THREAD = None
-        # Ferme la petite fenêtre de concurrence où un import peut ajouter une
-        # tâche juste après notre dernière lecture de la file.
-        with transaction(db_path) as con:
-            still_queued = con.execute(
-                "SELECT 1 FROM enrichment_jobs WHERE status='queued' LIMIT 1"
-            ).fetchone()
-        if still_queued:
-            _ensure_worker(db_path)
 
 
 def _ensure_worker(db_path=None):
     global _WORKER_THREAD
     with _WORKER_GUARD:
         if _WORKER_THREAD and _WORKER_THREAD.is_alive():
-            return
+            return False
         _WORKER_THREAD = threading.Thread(
             target=_worker_loop,
             args=(db_path,),
-            name="technical-enrichment",
+            name="iaquote-enrichment",
             daemon=True,
         )
         _WORKER_THREAD.start()
+        return True
 
 
 def resume_bulk_enrichment(db_path=None):
-    """Reprend les tâches interrompues après un redémarrage du conteneur."""
+    """Répare les éléments interrompus et reprend les tâches sans créer de doublon vide."""
     ready = technical_source_ready()
     with transaction(db_path) as con:
         cancelling = [
@@ -493,16 +801,19 @@ def resume_bulk_enrichment(db_path=None):
         for job_id in cancelling:
             _finish_cancelled_job(con, job_id)
         con.execute(
-            "UPDATE enrichment_job_items SET status='queued' WHERE status='running'"
+            """UPDATE enrichment_job_items SET status='queued', error=NULL, processed_at=NULL
+               WHERE status='running' AND job_id IN (
+                   SELECT id FROM enrichment_jobs WHERE status='running'
+               )"""
         )
-        con.execute(
-            "UPDATE enrichment_jobs SET status='queued' WHERE status='running'"
-        )
+        con.execute("UPDATE enrichment_jobs SET status='queued' WHERE status='running'")
         if ready:
             con.execute(
                 "UPDATE enrichment_jobs SET status='queued', last_error=NULL WHERE status='blocked'"
             )
-        queued = con.execute("SELECT COUNT(*) FROM enrichment_jobs WHERE status='queued'").fetchone()[0]
+        queued = con.execute(
+            "SELECT COUNT(*) FROM enrichment_jobs WHERE status='queued' AND total>0"
+        ).fetchone()[0]
     if queued:
         _ensure_worker(db_path)
     return queued
@@ -510,13 +821,17 @@ def resume_bulk_enrichment(db_path=None):
 
 def cancel_bulk_enrichment(job_id, db_path=None):
     with transaction(db_path) as con:
-        job = con.execute("SELECT status FROM enrichment_jobs WHERE id=?", (job_id,)).fetchone()
+        job = con.execute(
+            "SELECT status FROM enrichment_jobs WHERE id=?", (job_id,)
+        ).fetchone()
         if not job:
             raise KeyError(f"Tâche d'enrichissement introuvable : {job_id}")
         if job["status"] in {"queued", "blocked"}:
             _finish_cancelled_job(con, job_id)
         elif job["status"] == "running":
-            con.execute("UPDATE enrichment_jobs SET status='cancelling' WHERE id=?", (job_id,))
+            con.execute(
+                "UPDATE enrichment_jobs SET status='cancelling' WHERE id=?", (job_id,)
+            )
     return get_bulk_job(job_id, db_path)
 
 
@@ -526,28 +841,16 @@ def seed_preverified(path=None, db_path=None):
         return 0
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     count = 0
-    with transaction(db_path) as con:
-        for item in data:
-            exists = con.execute("SELECT 1 FROM products WHERE code=?", (item["code"],)).fetchone()
-            if not exists:
-                continue
-            current = con.execute("SELECT 1 FROM enrichments WHERE product_code=?", (item["code"],)).fetchone()
-            if current:
-                continue
-            con.execute(
-                """INSERT INTO enrichments(product_code, source_url, source_title, status, confidence,
-                   specs_json, raw_summary, validation_note, fetched_at) VALUES(?,?,?,?,?,?,?,?,?)""",
-                (
-                    item["code"],
-                    item.get("source_url", ""),
-                    item.get("source_title", "Fiche technique de démonstration"),
-                    item.get("status", "verified"),
-                    item.get("confidence", 1.0),
-                    json.dumps(item.get("specs", {}), ensure_ascii=False),
-                    item.get("raw_summary", "Données techniques de démonstration"),
-                    item.get("validation_note", "Données techniques de démonstration"),
-                    item.get("fetched_at", "2026-01-01T00:00:00+00:00"),
-                ),
-            )
-            count += 1
+    for item in data:
+        with transaction(db_path) as con:
+            exists = con.execute(
+                "SELECT 1 FROM products WHERE code=?", (item["code"],)
+            ).fetchone()
+            current = con.execute(
+                "SELECT 1 FROM enrichments WHERE product_code=?", (item["code"],)
+            ).fetchone()
+        if not exists or current:
+            continue
+        save_enrichment(item["code"], item, db_path)
+        count += 1
     return count

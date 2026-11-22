@@ -58,7 +58,7 @@ def create_app(test_config=None):
             product_count = con.execute("SELECT COUNT(*) FROM products").fetchone()[0]
             enriched_count = con.execute("SELECT COUNT(*) FROM enrichments WHERE status='verified'").fetchone()[0]
             quote_count = con.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
-        result = {"ok": True, "version": "0.3.0", "catalog_count": product_count, "verified_count": enriched_count, "quote_count": quote_count}
+        result = {"ok": True, "version": "0.3.1", "catalog_count": product_count, "verified_count": enriched_count, "quote_count": quote_count}
         job = get_bulk_job(db_path=db_path)
         if job:
             result["enrichment_job"] = job
