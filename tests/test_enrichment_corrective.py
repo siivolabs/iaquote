@@ -153,6 +153,33 @@ def add_job(path, status, total, processed=0, failed=0):
     return job_id
 
 
+def test_save_enrichment_accepts_preverified_data_without_source_url(module):
+    enrichment, db_path = module
+    add_products(db_path, 1)
+
+    enrichment.save_enrichment(
+        "P001",
+        {
+            "status": "verified",
+            "confidence": 1.0,
+            "specs": {"memory_type": "DDR5"},
+        },
+        str(db_path),
+    )
+
+    connection = connect(db_path)
+    saved = connection.execute(
+        "SELECT source_url,status,confidence,specs_json FROM enrichments WHERE product_code=?",
+        ("P001",),
+    ).fetchone()
+    connection.close()
+
+    assert saved["source_url"] == ""
+    assert saved["status"] == "verified"
+    assert saved["confidence"] == 1.0
+    assert saved["specs_json"] == '{"memory_type": "DDR5"}'
+
+
 def test_current_job_reports_catalog_not_latest_empty_job(module):
     enrichment, db_path = module
     add_products(db_path, 291)

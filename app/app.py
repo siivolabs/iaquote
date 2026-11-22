@@ -88,7 +88,11 @@ def create_app(test_config=None):
                     db_path=db_path,
                 )
                 result["enrichment_job"] = job
-                result["queued_for_enrichment"] = job["total"]
+                # `job` peut être un résumé global du catalogue lorsqu'aucune
+                # nouvelle tâche n'est créée. Le compteur de la réponse
+                # d'import doit refléter uniquement les références de cet
+                # import qui nécessitent un enrichissement.
+                result["queued_for_enrichment"] = len(enrichment_codes)
             else:
                 result["queued_for_enrichment"] = 0
                 result["auto_enrichment"] = "disabled"

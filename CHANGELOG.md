@@ -2,6 +2,8 @@
 
 ## 0.3.1 — 2026-11-22
 
+- amorçage des enrichissements prévalidés sans `source_url` et avec l'horodatage attendu par chaque version du schéma SQLite ;
+- correction du compteur d'enrichissements lors de la réimportation idempotente d'un catalogue ;
 - découverte de fiches par moteur HTML, API JSON configurable et fournisseur de repli ;
 - validation HTTPS stricte des domaines de recherche et des fiches techniques ;
 - reprise des tâches `running` et `blocked` après redémarrage ;

@@ -4,6 +4,8 @@ Cette archive contient l’application complète prête à être placée à la r
 
 ## Correctifs intégrés
 
+- amorçage des enrichissements prévalidés sans URL source et horodatage compatible avec les différentes versions du schéma SQLite ;
+- compteur d'enrichissements d'import limité aux références réellement nouvelles ou modifiées ;
 - découverte automatique par HTML, JSON et moteur de repli ;
 - validation HTTPS et liste blanche distincte pour les domaines de recherche et de fiches ;
 - reprise des tâches bloquées ou interrompues ;

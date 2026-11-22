@@ -390,18 +390,27 @@ def parse_product_page(html, url, designation, brand=""):
 
 def save_enrichment(code, result, db_path=None):
     """Enregistre sans supposer l'ordre des colonnes de la base existante."""
+    timestamp = utcnow()
     values = {
         "product_code": code,
-        "source_url": result["source_url"],
+        # Les enrichissements prévalidés peuvent provenir d'un jeu de données
+        # local et ne pas avoir d'URL. Une chaîne vide préserve cette
+        # information tout en restant compatible avec les anciennes bases où
+        # la colonne source_url était déclarée NOT NULL.
+        "source_url": result.get("source_url") or "",
         "source_title": result.get("source_title"),
         "status": result.get("status", "review"),
         "confidence": result.get("confidence", 0),
         "specs_json": json.dumps(result.get("specs", {}), ensure_ascii=False),
         "raw_summary": result.get("raw_summary"),
         "validation_note": result.get("validation_note"),
-        "checked_at": utcnow(),
-        "updated_at": utcnow(),
-        "verified_at": utcnow(),
+        # Les versions successives du schéma ont utilisé plusieurs noms pour
+        # l'horodatage. La sélection dynamique ci-dessous ne conserve que les
+        # colonnes présentes dans la base ouverte.
+        "fetched_at": timestamp,
+        "checked_at": timestamp,
+        "updated_at": timestamp,
+        "verified_at": timestamp,
     }
     with transaction(db_path) as con:
         columns = {
