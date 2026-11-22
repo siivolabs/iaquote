@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .db import transaction, utcnow
+from .db import table_columns, transaction, utcnow
 
 
 def create_quote(payload: dict[str, Any], db_path: str | None = None) -> dict[str, Any]:
@@ -31,11 +31,31 @@ def create_quote(payload: dict[str, Any], db_path: str | None = None) -> dict[st
         } for r in rows]
         total = round(sum(item["price"] for item in items), 2)
         now = utcnow()
+        customer_name = str(payload.get("customer_name") or "").strip()
+        kind = str(payload.get("kind") or "desktop")
+        encoded_items = json.dumps(items, ensure_ascii=False)
+        # V0.3.0/V0.3.1 quotes have additional NOT NULL columns. Supplying them
+        # keeps new writes compatible without rebuilding or deleting the table.
+        candidates = {
+            "customer_name": customer_name,
+            "kind": kind,
+            "status": "draft",
+            "total": total,
+            "items_json": encoded_items,
+            "created_at": now,
+            "updated_at": now,
+            "client_need": customer_name or "Devis IAQuote",
+            "budget_ttc": total,
+            "strategy": kind,
+            "quote_json": encoded_items,
+        }
+        available = table_columns(con, "quotes")
+        values = {name: value for name, value in candidates.items() if name in available}
+        columns = ",".join(f'"{name}"' for name in values)
+        placeholders = ",".join("?" for _ in values)
         cur = con.execute(
-            """INSERT INTO quotes(customer_name,kind,status,total,items_json,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?)""",
-            (str(payload.get("customer_name") or "").strip(), str(payload.get("kind") or "desktop"),
-             "draft", total, json.dumps(items, ensure_ascii=False), now, now),
+            f"INSERT INTO quotes({columns}) VALUES({placeholders})",
+            tuple(values.values()),
         )
         quote_id = int(cur.lastrowid)
     return get_quote(quote_id, db_path) or {}
@@ -47,7 +67,13 @@ def get_quote(quote_id: int, db_path: str | None = None) -> dict[str, Any] | Non
     if not row:
         return None
     result = dict(row)
-    result["items"] = json.loads(result.pop("items_json") or "[]")
+    try:
+        decoded = json.loads(result.pop("items_json") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        decoded = []
+    if isinstance(decoded, dict):
+        decoded = decoded.get("items") or decoded.get("products") or []
+    result["items"] = decoded if isinstance(decoded, list) else []
     return result
 
 

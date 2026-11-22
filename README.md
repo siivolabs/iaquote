@@ -2,7 +2,23 @@
 
 IAQuote importe un catalogue CSV dans SQLite, enrichit chaque article à partir de son **code article**, puis n'autorise la création d'un devis qu'avec des fiches vérifiées.
 
-## Correctifs de compatibilité
+## Correctifs de compatibilité SQLite
+
+Cette livraison corrige le blocage observé sur une base existante :
+
+```text
+sqlite3.OperationalError: table enrichment_jobs has no column named updated_at
+```
+
+Au démarrage, `init_db()` exécute désormais des migrations **transactionnelles,
+additives et idempotentes**. Les versions appliquées sont enregistrées dans
+`iaquote_schema_migrations` et dans `PRAGMA user_version`. La mise à niveau :
+
+- ajoute `updated_at` et les autres colonnes V0.3.2 manquantes ;
+- renseigne les nouvelles colonnes à partir des anciens horodatages et champs ;
+- conserve toutes les colonnes historiques, les lignes et les identifiants ;
+- les migrations d'exécution ne contiennent aucun `DROP TABLE`, `DELETE` ou remplacement du fichier SQLite ;
+- fonctionne aussi bien sur une installation neuve que sur les schémas V0.3.0/V0.3.1.
 
 Cette archive corrige le blocage `sqlite3.OperationalError: no such column: i.id` rencontré avec les bases créées par V0.3.1. Le code n'utilise plus de colonne `id` dans `enrichment_job_items` : il s'appuie sur la clé historique `(job_id, product_code)`, y compris pendant l'exécution du worker.
 
@@ -15,7 +31,12 @@ Elle conserve aussi le correctif `ModuleNotFoundError: No module named 'app'` de
 
 La CI vérifie explicitement `from app import create_app` depuis `/tmp`, hors de la racine du dépôt.
 
-Deux régressions HTTP ouvrent aussi une ancienne tâche V0.3.1 sur `/enrichment` et `/api/enrich/jobs/current`. Un troisième test exécute le worker sur la même table sans colonne `id`, et un quatrième vérifie qu'un catalogue SQLite existant de 291 produits reste intact au démarrage.
+Les régressions recréent également le schéma V0.3.1 réel, notamment
+`enrichment_jobs` sans `updated_at`, `enrichment_job_items` sans `id`, l'ancien
+catalogue, les enrichissements et les devis. Elles vérifient la conservation de
+291 produits, des tâches et de leurs erreurs, puis exécutent `POST
+/api/enrich/jobs` et la chaîne code article → redirection → extraction → SQLite
+pour `S0111966`.
 
 ## Fonctions conservées
 
@@ -69,7 +90,7 @@ Ouvrir <http://127.0.0.1:8094>. Le contrôle de santé est disponible sur `/api/
 L'archive contient un dossier `iaquote/` représentant la racine complète du dépôt.
 
 ```bash
-unzip iaquote-v0.3.2-github-actions.zip
+unzip iaquote-v0.3.2-migrations-complet.zip
 cd iaquote
 git init                         # uniquement pour un nouveau clone vide
 git add .
@@ -105,7 +126,7 @@ Remplacez le domaine d'exemple par l'endpoint de recherche directe déjà config
 
 **Conservez le volume `iaquote_data`** lors d'une mise à niveau. Le démarrage n'efface aucune table et n'exécute aucune migration destructive. Les 291 produits et les anciennes tâches restent dans le même fichier `/data/devisia.sqlite`.
 
-Le workflow CI teste le paquet et l'image, puis publie `ghcr.io/siivolabs/devisia:latest` uniquement pour un `push` sur `main`. Les pull requests construisent l'image sans la publier.
+Le workflow CI teste le paquet et l'image, puis publie `ghcr.io/siivolabs/iaquote:latest` uniquement pour un `push` sur `main`. Les pull requests construisent l'image sans la publier.
 
 ## Test réseau facultatif sur le NAS
 

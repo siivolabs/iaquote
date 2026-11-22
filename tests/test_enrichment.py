@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from app.db import transaction, utcnow
 from app.enrichment import (
-    catalog_stats, create_bulk_job, direct_search_url, extract_specs, get_bulk_job,
+    catalog_stats, create_bulk_job, direct_search_url, extract_specs, fetch_direct, get_bulk_job,
     recover_interrupted_jobs, run_bulk_job, save_enrichment, title_match_score, title_matches,
 )
 
@@ -26,6 +26,36 @@ def test_title_validation():
 def test_extract_table_and_definition_specs():
     html = "<table><tr><th>Socket</th><td>AM5</td></tr></table><dl><dt>Mémoire</dt><dd>DDR5</dd></dl>"
     assert extract_specs(html) == {"Socket": "AM5", "Mémoire": "DDR5"}
+
+
+def test_fetch_direct_uses_article_code_redirect_and_extracts_specs(monkeypatch):
+    monkeypatch.setenv("CATALOG_SEARCH_BASE_URL", "https://catalog.example/recherche/{code}")
+
+    @dataclass
+    class FakeResponse:
+        url: str = "https://catalog.example/fiche/intel-core-ultra-5-225"
+        text: str = """<html><head><title>Intel Core Ultra 5 225 - Processeur</title></head>
+            <body><table><tr><th>Socket</th><td>LGA1851</td></tr></table></body></html>"""
+
+        def raise_for_status(self):
+            return None
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return FakeResponse()
+
+    session = FakeSession()
+    result = fetch_direct("S0111966", "Intel Core Ultra 5 225", session=session)
+
+    assert session.calls[0][0] == "https://catalog.example/recherche/S0111966"
+    assert session.calls[0][1]["allow_redirects"] is True
+    assert result["status"] == "verified"
+    assert result["source_url"].endswith("/fiche/intel-core-ultra-5-225")
+    assert result["specs"] == {"Socket": "LGA1851"}
 
 
 def test_save_preverified_without_source_url(app):

@@ -15,10 +15,10 @@ from urllib.parse import quote
 import requests
 from bs4 import BeautifulSoup
 
-from .db import transaction, utcnow
+from .db import insert_product, table_columns, transaction, utcnow
 
 DEFAULT_SEARCH_URL = ""
-ACTIVE = ("pending", "running", "blocked")
+ACTIVE = ("pending", "queued", "running", "blocked", "cancelling")
 
 
 def direct_search_url(code: str, base_url: str | None = None) -> str:
@@ -101,10 +101,7 @@ def save_enrichment(code: str, result: dict[str, Any], db_path: str | None = Non
     status = str(result.get("status") or "review")
     with transaction(db_path) as con:
         if not con.execute("SELECT 1 FROM products WHERE code=?", (code,)).fetchone():
-            con.execute(
-                "INSERT INTO products(code,designation,created_at,updated_at) VALUES(?,?,?,?)",
-                (code, str(result.get("designation") or code), now, now),
-            )
+            insert_product(con, code, str(result.get("designation") or code), now=now)
         values = (
             code, source_url, result.get("source_title"), status, float(result.get("confidence") or 0),
             json.dumps(result.get("specs") or {}, ensure_ascii=False), result.get("raw_summary"),
@@ -152,7 +149,7 @@ def _eligible_codes(con, codes: Iterable[str] | None, retry_failed: bool) -> lis
     if retry_failed:
         where += " OR e.status IN ('failed','not_found','review')"
     return [r["code"] for r in con.execute(
-        f"SELECT p.code FROM products p LEFT JOIN enrichments e ON e.product_code=p.code WHERE {where} ORDER BY p.id"
+        f"SELECT p.code FROM products p LEFT JOIN enrichments e ON e.product_code=p.code WHERE {where} ORDER BY p.code"
     )]
 
 
@@ -163,11 +160,11 @@ def create_bulk_job(codes: Iterable[str] | None = None, db_path: str | None = No
         selected = _eligible_codes(con, codes, retry_failed)
         if not selected:
             active = con.execute(
-                "SELECT id FROM enrichment_jobs WHERE status IN ('pending','running','blocked') ORDER BY id DESC LIMIT 1"
+                "SELECT id FROM enrichment_jobs WHERE status IN ('pending','queued','running','blocked','cancelling') ORDER BY id DESC LIMIT 1"
             ).fetchone()
             return int(active["id"]) if active else None
         active = con.execute(
-            "SELECT id FROM enrichment_jobs WHERE status IN ('pending','running','blocked') ORDER BY id DESC LIMIT 1"
+            "SELECT id FROM enrichment_jobs WHERE status IN ('pending','queued','running','blocked','cancelling') ORDER BY id DESC LIMIT 1"
         ).fetchone()
         if active:
             job_id = int(active["id"])
@@ -194,7 +191,7 @@ def create_bulk_job(codes: Iterable[str] | None = None, db_path: str | None = No
 def recover_interrupted_jobs(db_path: str | None = None) -> int:
     now = utcnow()
     with transaction(db_path) as con:
-        rows = con.execute("SELECT id FROM enrichment_jobs WHERE status IN ('running','blocked')").fetchall()
+        rows = con.execute("SELECT id FROM enrichment_jobs WHERE status IN ('running','blocked','cancelling')").fetchall()
         for row in rows:
             con.execute(
                 "UPDATE enrichment_job_items SET status='pending', started_at=NULL WHERE job_id=? AND status='running'",
@@ -234,7 +231,8 @@ def run_bulk_job(job_id: int, db_path: str | None = None,
             item = con.execute(
                 """SELECT i.product_code,p.designation FROM enrichment_job_items i
                    JOIN products p ON p.code=i.product_code
-                   WHERE i.job_id=? AND i.status='pending' ORDER BY i.product_code LIMIT 1""", (job_id,),
+                    WHERE i.job_id=? AND i.status IN ('pending','queued')
+                    ORDER BY i.product_code LIMIT 1""", (job_id,),
             ).fetchone()
             if not item:
                 _refresh_job(con, job_id)
@@ -255,11 +253,20 @@ def run_bulk_job(job_id: int, db_path: str | None = None,
             error = f"{type(exc).__name__}: {exc}"[:1000]
             save_enrichment(item["product_code"], {"status": "failed", "error": error}, db_path)
         with transaction(db_path) as con:
-            con.execute(
-                """UPDATE enrichment_job_items SET status=?, error=?, finished_at=?
-                   WHERE job_id=? AND product_code=?""",
-                (status, error, utcnow(), job_id, item["product_code"]),
-            )
+            finished = utcnow()
+            if "processed_at" in table_columns(con, "enrichment_job_items"):
+                con.execute(
+                    """UPDATE enrichment_job_items
+                       SET status=?, error=?, finished_at=?, processed_at=?
+                       WHERE job_id=? AND product_code=?""",
+                    (status, error, finished, finished, job_id, item["product_code"]),
+                )
+            else:
+                con.execute(
+                    """UPDATE enrichment_job_items SET status=?, error=?, finished_at=?
+                       WHERE job_id=? AND product_code=?""",
+                    (status, error, finished, job_id, item["product_code"]),
+                )
             _refresh_job(con, job_id)
         if pause:
             time.sleep(pause)
@@ -290,7 +297,8 @@ def get_bulk_job(job_id: int | None = None, db_path: str | None = None) -> dict[
         if job_id is None:
             row = con.execute(
                 """SELECT * FROM enrichment_jobs
-                   ORDER BY CASE WHEN status IN ('pending','running','blocked') THEN 0 ELSE 1 END, id DESC LIMIT 1"""
+                   ORDER BY CASE WHEN status IN ('pending','queued','running','blocked','cancelling') THEN 0 ELSE 1 END,
+                            id DESC LIMIT 1"""
             ).fetchone()
         else:
             row = con.execute("SELECT * FROM enrichment_jobs WHERE id=?", (job_id,)).fetchone()

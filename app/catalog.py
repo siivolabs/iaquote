@@ -6,7 +6,7 @@ import io
 import re
 from typing import Any, Iterable
 
-from .db import transaction, utcnow
+from .db import insert_product, table_columns, transaction, utcnow
 
 HEADER_ALIASES = {
     "code": {"code", "code article", "reference", "référence", "ref", "sku"},
@@ -80,21 +80,40 @@ def import_products(rows: Iterable[dict[str, Any]], db_path: str | None = None) 
             designation = str(item.get("designation") or "").strip()
             if not code or not designation:
                 continue
-            existing = con.execute("SELECT id FROM products WHERE code = ?", (code,)).fetchone()
+            # Historical catalogues use ``code`` as their primary key and have no ``id``.
+            existing = con.execute("SELECT code FROM products WHERE code = ?", (code,)).fetchone()
             if existing:
+                price = _number(item.get("price"))
+                stock = _number(item.get("stock"), integer=True)
+                assignments = [
+                    "designation=?", "category=?", "price=?", "stock=?",
+                    "active=1", "updated_at=?",
+                ]
+                values: list[Any] = [designation, item.get("category", ""), price, stock, now]
+                legacy = table_columns(con, "products")
+                if "sale_price_ttc" in legacy:
+                    assignments.append("sale_price_ttc=?")
+                    values.append(price)
+                if "stock_shop" in legacy:
+                    assignments.append("stock_shop=?")
+                    values.append(stock)
+                if "obsolete" in legacy:
+                    assignments.append("obsolete=0")
+                values.append(code)
                 con.execute(
-                    """UPDATE products SET designation=?, category=?, price=?, stock=?, active=1,
-                       updated_at=? WHERE code=?""",
-                    (designation, item.get("category", ""), _number(item.get("price")),
-                     _number(item.get("stock"), integer=True), now, code),
+                    f"UPDATE products SET {', '.join(assignments)} WHERE code=?",
+                    values,
                 )
                 updated += 1
             else:
-                con.execute(
-                    """INSERT INTO products(code,designation,category,price,stock,active,created_at,updated_at)
-                       VALUES(?,?,?,?,?,1,?,?)""",
-                    (code, designation, item.get("category", ""), _number(item.get("price")),
-                     _number(item.get("stock"), integer=True), now, now),
+                insert_product(
+                    con,
+                    code,
+                    designation,
+                    category=str(item.get("category") or ""),
+                    price=float(_number(item.get("price"))),
+                    stock=int(_number(item.get("stock"), integer=True)),
+                    now=now,
                 )
                 created.append(code)
     return {"created": len(created), "updated": updated, "created_codes": created}

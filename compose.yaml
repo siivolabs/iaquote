@@ -1,7 +1,7 @@
 services:
   iaquote:
     build: .
-    image: ghcr.io/siivolabs/devisia:latest
+    image: ghcr.io/siivolabs/iaquote:latest
     container_name: iaquote
     restart: unless-stopped
     ports:

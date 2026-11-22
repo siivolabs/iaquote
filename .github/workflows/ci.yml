@@ -43,4 +43,4 @@ jobs:
         with:
           context: .
           push: ${{ github.event_name == 'push' }}
-          tags: ghcr.io/siivolabs/devisia:latest
+          tags: ghcr.io/siivolabs/iaquote:latest
