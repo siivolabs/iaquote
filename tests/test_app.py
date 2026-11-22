@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from app.app import create_app
-from app.enrichment import parse_product_page
+from app.enrichment import _process_job, get_bulk_job, parse_product_page, queue_bulk_enrichment
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 
@@ -88,4 +88,44 @@ def test_reimport_same_csv_is_idempotent(client):
     )
     assert response.status_code == 200
     assert response.get_json()["imported"] == 9
+    assert response.get_json()["queued_for_enrichment"] == 0
     assert client.get("/api/health").get_json()["catalog_count"] == 9
+
+
+def test_new_import_is_automatically_queued(client):
+    raw = (
+        "Code article;Désignation;Catégorie;Prix TTC €\n"
+        "DEMO-NEW-01;Nouveau produit démo;Composant;99,90\n"
+    ).encode("utf-8")
+    response = client.post(
+        "/api/import",
+        data={"file": (io.BytesIO(raw), "nouveau.csv")},
+        content_type="multipart/form-data",
+    )
+    data = response.get_json()
+    assert response.status_code == 200
+    assert data["queued_for_enrichment"] == 1
+    # Sans source privée dans les tests, la tâche reste persistée et explique
+    # clairement pourquoi elle ne démarre pas au lieu de perdre le produit.
+    assert data["enrichment_job"]["status"] == "blocked"
+
+
+def test_bulk_worker_continues_after_one_product_failure(client, monkeypatch):
+    db_path = client.application.config["DATABASE_PATH"]
+    monkeypatch.setattr("app.enrichment.technical_source_ready", lambda: True)
+
+    def fake_enrich(code, force=False, db_path=None):
+        if code == "DEMO-CPU-01":
+            raise RuntimeError("échec simulé")
+        return {"enrichment_status": "verified"}
+
+    monkeypatch.setattr("app.enrichment.enrich_product", fake_enrich)
+    job = queue_bulk_enrichment(
+        ["DEMO-CPU-01", "DEMO-MB-01"], force=True, db_path=db_path, launch=False
+    )
+    _process_job(job["id"], db_path)
+    finished = get_bulk_job(job["id"], db_path)
+    assert finished["status"] == "completed_with_errors"
+    assert finished["processed"] == 2
+    assert finished["verified"] == 1
+    assert finished["failed"] == 1

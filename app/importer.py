@@ -50,6 +50,10 @@ def import_csv_bytes(data, db_path=None):
         raise ValueError("Colonnes obligatoires absentes : " + ", ".join(missing))
 
     imported = 0
+    created = 0
+    updated = 0
+    unchanged = 0
+    enrichment_codes = set()
     now = utcnow()
     with transaction(db_path) as con:
         for row in reader:
@@ -57,6 +61,35 @@ def import_csv_bytes(data, db_path=None):
             designation = (row.get("Désignation") or "").strip()
             if not code or not designation:
                 continue
+            category = (row.get("Catégorie") or "").strip()
+            brand = (row.get("Marque") or "").strip()
+            existing = con.execute(
+                "SELECT designation, category, brand FROM products WHERE code=?", (code,)
+            ).fetchone()
+            technical_identity_changed = bool(
+                existing
+                and (
+                    existing["designation"] != designation
+                    or (existing["category"] or "") != category
+                    or (existing["brand"] or "") != brand
+                )
+            )
+            if existing is None:
+                created += 1
+                enrichment_codes.add(code)
+            elif technical_identity_changed:
+                updated += 1
+                enrichment_codes.add(code)
+                # Une fiche mise en cache ne doit pas survivre à un changement de
+                # désignation, de marque ou de catégorie.
+                con.execute("DELETE FROM enrichments WHERE product_code=?", (code,))
+            else:
+                unchanged += 1
+                enriched = con.execute(
+                    "SELECT 1 FROM enrichments WHERE product_code=?", (code,)
+                ).fetchone()
+                if not enriched:
+                    enrichment_codes.add(code)
             con.execute(
                 """
                 INSERT INTO products (
@@ -80,7 +113,7 @@ def import_csv_bytes(data, db_path=None):
                 """,
                 (
                     code, (row.get("Code famille") or "").strip(), designation,
-                    (row.get("Catégorie") or "").strip(), (row.get("Marque") or "").strip(),
+                    category, brand,
                     (row.get("Type de référencement") or "").strip(),
                     parse_money(row.get("Prix d'achat €")), parse_money(row.get("Marge")),
                     parse_money(row.get("Indice")), parse_money(row.get("Prix barré")),
@@ -93,7 +126,17 @@ def import_csv_bytes(data, db_path=None):
                 ),
             )
             imported += 1
-    return {"imported": imported, "delimiter": delimiter, "headers": len(headers)}
+    return {
+        "imported": imported,
+        "created": created,
+        "updated": updated,
+        "unchanged": unchanged,
+        "delimiter": delimiter,
+        "headers": len(headers),
+        # Réservé à l'orchestration serveur ; l'API retire cette liste avant de
+        # répondre afin de ne pas renvoyer plusieurs centaines de codes.
+        "enrichment_codes": sorted(enrichment_codes),
+    }
 
 
 def import_csv_file(path, db_path=None):

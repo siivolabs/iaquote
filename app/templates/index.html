@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>DevisIA V0.2</title>
+  <title>IAQuote V0.3</title>
+  <script>document.documentElement.dataset.theme=localStorage.getItem('iaquote-theme')||'dark';</script>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="logo">D</span><div><strong>DevisIA</strong><small>V0.2 · catalogue local + Ollama</small></div></div>
-    <div class="status-row"><span id="appStatus" class="pill neutral">Application…</span><span id="ollamaStatus" class="pill neutral">Ollama…</span></div>
+    <div class="brand"><span class="logo">IQ</span><div><strong>IAQuote</strong><small>V0.3 · catalogue local + Ollama</small></div></div>
+    <div class="top-actions"><div class="status-row"><span id="appStatus" class="pill neutral">Application…</span><span id="ollamaStatus" class="pill neutral">Ollama…</span></div><button id="themeToggle" class="theme-toggle" type="button" aria-label="Changer le thème">☀ Mode clair</button></div>
   </header>
   <nav class="tabs" aria-label="Navigation">
     <button class="tab active" data-view="dashboard">Tableau de bord</button>
@@ -31,8 +32,9 @@
         <article><span>Devis enregistrés</span><strong id="statQuotes">—</strong></article>
         <article><span>Modèle</span><strong id="statModel">qwen3:32b</strong></article>
       </div>
+      <div class="panel enrichment-summary"><span class="live-dot" aria-hidden="true"></span><span id="enrichmentSummary">Aucune tâche d’enrichissement lancée.</span><button class="secondary compact" data-go="enrichment">Voir le suivi</button></div>
       <div class="grid two">
-        <article class="panel"><h2>Cycle de données</h2><ol class="steps"><li><b>Importer</b><span>Le CSV reste la source commerciale.</span></li><li><b>Enrichir</b><span>Les fiches techniques sont mises en cache dans SQLite.</span></li><li><b>Contrôler</b><span>Le moteur de règles vérifie les compatibilités connues.</span></li><li><b>Argumenter</b><span>Qwen3 formule une explication à partir des produits sélectionnés.</span></li></ol></article>
+        <article class="panel"><h2>Cycle de données</h2><ol class="steps"><li><b>Importer</b><span>Le CSV reste la source commerciale.</span></li><li><b>Enrichir automatiquement</b><span>Tous les nouveaux produits sont placés dans une file et traités en arrière-plan.</span></li><li><b>Contrôler</b><span>Le moteur de règles vérifie les compatibilités connues.</span></li><li><b>Argumenter</b><span>Qwen3 formule une explication à partir des produits sélectionnés.</span></li></ol></article>
         <article class="panel"><h2>Garde-fous</h2><ul class="checks-list"><li>Une référence absente du CSV n'entre pas dans le devis.</li><li>Un prix ou une marge n'est jamais demandé à l'IA.</li><li>Un contrôle inconnu reste affiché comme inconnu.</li><li>Le vendeur valide toujours la proposition finale.</li></ul></article>
       </div>
     </section>
@@ -51,7 +53,7 @@
     </section>
 
     <section id="catalog" class="view">
-      <div class="section-head"><div><p class="eyebrow">CATALOGUE</p><h1>Références commerciales</h1></div><label class="file-button">Importer un CSV<input id="csvFile" type="file" accept=".csv,text/csv"></label></div>
+      <div class="section-head"><div><p class="eyebrow">CATALOGUE</p><h1>Références commerciales</h1><p class="muted">L’import déclenche automatiquement l’enrichissement de tous les produits nouveaux ou modifiés.</p></div><label class="file-button">Importer et enrichir le CSV<input id="csvFile" type="file" accept=".csv,text/csv"></label></div>
       <div class="toolbar panel"><input id="catalogSearch" placeholder="Code, désignation ou marque"><select id="categoryFilter"><option value="">Toutes les catégories</option></select><select id="statusFilter"><option value="">Tous les statuts</option><option value="verified">Vérifiés</option><option value="review">À contrôler</option><option value="missing">Non enrichis</option></select><button id="catalogRefresh" class="secondary">Rechercher</button></div>
       <p id="catalogInfo" class="muted"></p>
       <div class="table-wrap panel"><table><thead><tr><th>Référence</th><th>Produit</th><th>Catégorie</th><th>Prix TTC</th><th>Marge HT</th><th>Stock</th><th>Technique</th></tr></thead><tbody id="catalogRows"></tbody></table></div>
@@ -59,11 +61,19 @@
     </section>
 
     <section id="enrichment" class="view">
-      <div class="section-head"><div><p class="eyebrow">ENRICHISSEMENT</p><h1>Fiches techniques</h1></div></div>
+      <div class="section-head"><div><p class="eyebrow">ENRICHISSEMENT</p><h1>Traitement automatique du catalogue</h1><p class="muted">L’import place chaque produit sans fiche vérifiée dans une file persistante. Vous pouvez continuer à utiliser IAQuote pendant le traitement.</p></div><button id="startBulk" class="primary" type="button">Enrichir tout ce qui manque</button></div>
+      <article id="bulkProgress" class="panel bulk-progress hidden" aria-live="polite">
+        <div class="bulk-head"><div><span id="bulkStatus" class="pill neutral">En attente</span><h2>Progression globale</h2></div><button id="cancelBulk" class="secondary compact hidden" type="button">Arrêter</button></div>
+        <div class="progress-track"><div id="bulkProgressBar" class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div></div>
+        <p id="bulkProgressText" class="progress-label">0 / 0</p>
+        <div class="bulk-metrics"><span><b id="bulkVerified">0</b> vérifiés</span><span><b id="bulkReview">0</b> à contrôler</span><span><b id="bulkFailed">0</b> échecs</span><span><b id="bulkRemaining">0</b> restants</span></div>
+        <p id="bulkError" class="error-text"></p>
+      </article>
       <div class="grid two">
-        <form id="enrichForm" class="panel form-stack"><h2>Enrichir une référence</h2><label>Code article<input id="enrichCode" placeholder="DEMO-CPU-01" required></label><label>Adresse exacte de la fiche technique <small>(facultative)</small><input id="enrichUrl" type="url" placeholder="Adresse HTTPS autorisée"></label><label class="toggle"><input id="enrichForce" type="checkbox"><span>Actualiser même si la fiche existe</span></label><button class="primary" type="submit">Lancer l'enrichissement</button><p id="enrichMessage" class="muted"></p></form>
-        <article class="panel"><h2>Comportement réseau</h2><p>L'application interroge uniquement la source définie dans la configuration privée, espace les requêtes et met le résultat en cache. Si la recherche automatique échoue, collez l'adresse exacte d'une fiche autorisée.</p><div class="notice">Une fiche incertaine est marquée <b>À contrôler</b> et n'est pas utilisée quand le filtre « vérifié uniquement » est actif.</div></article>
+        <article class="panel"><h2>Ce qui se passe après un import</h2><ol class="steps compact-steps"><li><b>File persistante</b><span>Les 300 produits peuvent être planifiés sans bloquer la page.</span></li><li><b>Traitement séquentiel</b><span>Les requêtes sont espacées pour ménager la source.</span></li><li><b>Cache local</b><span>Les fiches déjà vérifiées ne sont pas téléchargées à nouveau.</span></li></ol></article>
+        <article class="panel"><h2>Comportement réseau</h2><p>L'application interroge uniquement la source définie dans la configuration privée, espace les requêtes et met le résultat en cache. Un échec sur un produit n’interrompt pas les suivants.</p><div class="notice">Une fiche incertaine est marquée <b>À contrôler</b> et n'est pas utilisée quand le filtre « vérifié uniquement » est actif.</div></article>
       </div>
+      <details class="panel advanced"><summary>Correction manuelle d’une référence</summary><form id="enrichForm" class="form-stack"><label>Code article<input id="enrichCode" placeholder="DEMO-CPU-01" required></label><label>Adresse exacte de la fiche technique <small>(facultative)</small><input id="enrichUrl" type="url" placeholder="Adresse HTTPS autorisée"></label><label class="toggle"><input id="enrichForce" type="checkbox"><span>Actualiser même si la fiche existe</span></label><button class="primary" type="submit">Relancer cette référence</button><p id="enrichMessage" class="muted"></p></form></details>
       <div class="table-wrap panel"><table><thead><tr><th>Référence</th><th>Produit</th><th>Statut</th><th>Confiance</th><th>Source</th><th>Note</th></tr></thead><tbody id="enrichmentRows"></tbody></table></div>
     </section>
 

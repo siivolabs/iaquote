@@ -1,12 +1,14 @@
-# DevisIA
+# IAQuote
 
-DevisIA est une application web de préparation de devis informatiques. Elle importe un catalogue CSV privé, applique des contrôles déterministes de compatibilité, puis utilise un modèle Ollama pour rédiger un argumentaire commercial sans lui déléguer les prix, les marges ni les décisions techniques.
+IAQuote est une application web de préparation de devis informatiques. Elle importe un catalogue CSV privé, applique des contrôles déterministes de compatibilité, puis utilise un modèle Ollama pour rédiger un argumentaire commercial sans lui déléguer les prix, les marges ni les décisions techniques.
 
 ## Fonctions
 
 - import CSV avec détection du séparateur et de l'encodage ;
 - catalogue local SQLite, stocks, prix et marges ;
-- enrichissement technique depuis une source HTTPS configurée en privé ;
+- enrichissement automatique de tout le catalogue, en arrière-plan, depuis une source HTTPS configurée en privé ;
+- file persistante avec progression, reprise après redémarrage, arrêt et relance des échecs ;
+- interface sombre par défaut avec thème clair facultatif ;
 - sélection pour PC fixe ou portable ;
 - contrôles de socket, mémoire, format, dimensions, refroidissement, alimentation et budget ;
 - argumentaire Ollama avec repli local si le modèle est indisponible ;
@@ -37,7 +39,7 @@ docker compose up -d --build
 
 L'interface est ensuite disponible sur `http://adresse-du-nas:8094`.
 
-Au premier démarrage, la base est vide. Importez le catalogue réel depuis l'onglet **Catalogue**. Les colonnes minimales sont :
+Au premier démarrage, la base est vide. Importez le catalogue réel depuis l'onglet **Catalogue**. L'import répond immédiatement, puis tous les produits nouveaux ou techniquement modifiés sont enrichis dans une file d'arrière-plan. Les colonnes minimales sont :
 
 - `Code article`
 - `Désignation`
@@ -57,13 +59,23 @@ TECHNICAL_PRODUCT_PATH_MARKER=/fiche/
 TECHNICAL_LINK_SELECTOR=a[href]
 TECHNICAL_REQUEST_DELAY=2.5
 TECHNICAL_TIMEOUT=25
+AUTO_ENRICH_ON_IMPORT=true
 ```
 
 `TECHNICAL_ALLOWED_HOSTS` accepte une liste séparée par des virgules. L'application refuse les schémas non HTTPS, les domaines absents de cette liste et les redirections vers un domaine non autorisé.
 
+## Enrichissement automatique d'un catalogue complet
+
+- Chaque import planifie tous les articles sans fiche technique, sans demander de saisie manuelle.
+- Les fiches déjà vérifiées restent en cache. Une modification de la désignation, de la marque ou de la catégorie invalide uniquement la fiche concernée.
+- Le traitement est séquentiel et respecte `TECHNICAL_REQUEST_DELAY` pour ne pas solliciter excessivement la source.
+- Un échec est enregistré pour le produit concerné, mais les produits suivants continuent d'être traités.
+- La tâche et sa progression sont stockées dans SQLite. Après un redémarrage du conteneur, une tâche interrompue reprend automatiquement.
+- L'onglet **Enrichissement** permet de suivre les produits vérifiés, à contrôler, en échec et restants, puis de relancer tout ce qui manque.
+
 ## Déploiement GitHub, GHCR et Dockge
 
-1. Créez un dépôt GitHub vide nommé `devisia`.
+1. Créez un dépôt GitHub vide nommé `iaquote`.
 2. Décompressez l'archive et publiez son contenu sur la branche `main`.
 3. L'action `.github/workflows/container.yml` exécute les tests puis publie `ghcr.io/<compte>/devisia:latest`.
 4. Dans `compose.dockge.yml`, remplacez `VOTRE_COMPTE` par le propriétaire du dépôt.

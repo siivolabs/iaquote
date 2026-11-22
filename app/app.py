@@ -6,7 +6,14 @@ from flask import Flask, jsonify, render_template, request
 
 from . import ollama
 from .db import connect, init_db, product_with_enrichment, row_to_dict, transaction
-from .enrichment import enrich_product, seed_preverified
+from .enrichment import (
+    cancel_bulk_enrichment,
+    enrich_product,
+    get_bulk_job,
+    queue_bulk_enrichment,
+    resume_bulk_enrichment,
+    seed_preverified,
+)
 from .importer import import_csv_bytes, import_csv_file
 from .quote_engine import generate_quote
 
@@ -19,6 +26,14 @@ def _bootstrap(db_path):
     if count == 0 and csv_path and Path(csv_path).is_file():
         import_csv_file(csv_path, db_path)
     seed_preverified(os.getenv("PRESEED_PATH", ""), db_path)
+    resume_bulk_enrichment(db_path)
+
+
+def _env_enabled(name, default=True):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "oui", "on"}
 
 
 def create_app(test_config=None):
@@ -43,7 +58,10 @@ def create_app(test_config=None):
             product_count = con.execute("SELECT COUNT(*) FROM products").fetchone()[0]
             enriched_count = con.execute("SELECT COUNT(*) FROM enrichments WHERE status='verified'").fetchone()[0]
             quote_count = con.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
-        result = {"ok": True, "version": "0.2.0", "catalog_count": product_count, "verified_count": enriched_count, "quote_count": quote_count}
+        result = {"ok": True, "version": "0.3.0", "catalog_count": product_count, "verified_count": enriched_count, "quote_count": quote_count}
+        job = get_bulk_job(db_path=db_path)
+        if job:
+            result["enrichment_job"] = job
         if request.args.get("deep") == "1":
             result["ollama"] = ollama.health()
         return jsonify(result)
@@ -61,7 +79,19 @@ def create_app(test_config=None):
             return jsonify({"error": "Le fichier doit être au format CSV"}), 400
         try:
             result = import_csv_bytes(upload.read(), db_path)
+            enrichment_codes = result.pop("enrichment_codes", [])
             result["preseeded"] = seed_preverified(os.getenv("PRESEED_PATH", ""), db_path)
+            if _env_enabled("AUTO_ENRICH_ON_IMPORT", True):
+                job = queue_bulk_enrichment(
+                    enrichment_codes,
+                    trigger="import",
+                    db_path=db_path,
+                )
+                result["enrichment_job"] = job
+                result["queued_for_enrichment"] = job["total"]
+            else:
+                result["queued_for_enrichment"] = 0
+                result["auto_enrichment"] = "disabled"
             return jsonify(result)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -119,6 +149,34 @@ def create_app(test_config=None):
             return jsonify({"error": str(exc), "hint": "Vous pouvez fournir l'adresse exacte de la fiche technique."}), 400
         except Exception as exc:
             return jsonify({"error": f"Échec de l'enrichissement technique : {exc}", "hint": "La source peut refuser les requêtes automatisées. Réessayez plus tard ou saisissez l'adresse exacte."}), 502
+
+    @app.post("/api/enrich/bulk")
+    def enrich_bulk():
+        body = request.get_json(silent=True) or {}
+        job = queue_bulk_enrichment(
+            force=bool(body.get("force")),
+            trigger="manual",
+            db_path=db_path,
+        )
+        return jsonify(job), 202 if job["status"] in {"queued", "running"} else 200
+
+    @app.get("/api/enrich/jobs/current")
+    def enrichment_job_current():
+        return jsonify({"job": get_bulk_job(db_path=db_path)})
+
+    @app.get("/api/enrich/jobs/<int:job_id>")
+    def enrichment_job(job_id):
+        job = get_bulk_job(job_id, db_path)
+        if not job:
+            return jsonify({"error": "Tâche d'enrichissement introuvable"}), 404
+        return jsonify(job)
+
+    @app.post("/api/enrich/jobs/<int:job_id>/cancel")
+    def enrichment_job_cancel(job_id):
+        try:
+            return jsonify(cancel_bulk_enrichment(job_id, db_path))
+        except KeyError as exc:
+            return jsonify({"error": str(exc)}), 404
 
     @app.get("/api/enrichments")
     def enrichments():

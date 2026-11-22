@@ -14,6 +14,8 @@ from .db import product_with_enrichment, transaction, utcnow
 
 _LOCK = threading.Lock()
 _LAST_REQUEST = 0.0
+_WORKER_GUARD = threading.Lock()
+_WORKER_THREAD = None
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
     "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.7",
@@ -256,6 +258,266 @@ def enrich_product(code, source_url=None, force=False, db_path=None):
     save_enrichment(code, result, db_path)
     with transaction(db_path) as con:
         return product_with_enrichment(con, code)
+
+
+def technical_source_ready():
+    """Indique si la recherche automatique peut réellement fonctionner."""
+    return bool(os.getenv("TECHNICAL_SEARCH_URL", "").strip() and _allowed_hosts())
+
+
+def _job_dict(row):
+    if not row:
+        return None
+    item = dict(row)
+    item["force"] = bool(item.get("force"))
+    total = int(item.get("total") or 0)
+    processed = int(item.get("processed") or 0)
+    item["remaining"] = max(0, total - processed)
+    item["progress_percent"] = round((processed / total * 100) if total else 100, 1)
+    return item
+
+
+def get_bulk_job(job_id=None, db_path=None):
+    with transaction(db_path) as con:
+        if job_id is None:
+            row = con.execute("SELECT * FROM enrichment_jobs ORDER BY id DESC LIMIT 1").fetchone()
+        else:
+            row = con.execute("SELECT * FROM enrichment_jobs WHERE id=?", (job_id,)).fetchone()
+    return _job_dict(row)
+
+
+def _eligible_codes(con, codes=None, force=False):
+    params = []
+    where = ["1=1"]
+    if codes is not None:
+        clean_codes = sorted({str(code).strip() for code in codes if str(code).strip()})
+        if not clean_codes:
+            return []
+        placeholders = ",".join("?" for _ in clean_codes)
+        where.append(f"p.code IN ({placeholders})")
+        params.extend(clean_codes)
+    if not force:
+        where.append("(e.product_code IS NULL OR e.status='review')")
+    where.append(
+        """NOT EXISTS (
+            SELECT 1 FROM enrichment_job_items ji
+            JOIN enrichment_jobs j ON j.id=ji.job_id
+            WHERE ji.product_code=p.code
+              AND ji.status IN ('queued','running')
+              AND j.status IN ('queued','running','blocked','cancelling')
+        )"""
+    )
+    rows = con.execute(
+        f"""SELECT p.code
+            FROM products p
+            LEFT JOIN enrichments e ON e.product_code=p.code
+            WHERE {' AND '.join(where)}
+            ORDER BY p.category, p.designation""",
+        params,
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def queue_bulk_enrichment(codes=None, force=False, trigger="manual", db_path=None, launch=True):
+    """Crée une tâche persistante et la traite en arrière-plan, un produit à la fois."""
+    ready = technical_source_ready()
+    created_at = utcnow()
+    with transaction(db_path) as con:
+        selected = _eligible_codes(con, codes, force)
+        status = "queued" if ready and selected else "blocked" if selected else "completed"
+        last_error = None
+        if status == "blocked":
+            last_error = "La recherche technique automatique n'est pas configurée."
+        cur = con.execute(
+            """INSERT INTO enrichment_jobs(
+                   created_at, finished_at, status, trigger, force, total, processed, last_error
+               ) VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                created_at,
+                created_at if status == "completed" else None,
+                status,
+                trigger,
+                1 if force else 0,
+                len(selected),
+                0,
+                last_error,
+            ),
+        )
+        job_id = cur.lastrowid
+        con.executemany(
+            "INSERT INTO enrichment_job_items(job_id, product_code, status) VALUES(?,?,'queued')",
+            [(job_id, code) for code in selected],
+        )
+    if launch and status == "queued":
+        _ensure_worker(db_path)
+    return get_bulk_job(job_id, db_path)
+
+
+def _refresh_job_counts(con, job_id):
+    counts = {
+        row["status"]: row["count"]
+        for row in con.execute(
+            "SELECT status, COUNT(*) AS count FROM enrichment_job_items WHERE job_id=? GROUP BY status",
+            (job_id,),
+        ).fetchall()
+    }
+    verified = counts.get("verified", 0)
+    review = counts.get("review", 0)
+    failed = counts.get("failed", 0)
+    cancelled = counts.get("cancelled", 0)
+    processed = verified + review + failed + cancelled
+    con.execute(
+        """UPDATE enrichment_jobs
+           SET processed=?, verified=?, review=?, failed=?, cancelled=?
+           WHERE id=?""",
+        (processed, verified, review, failed, cancelled, job_id),
+    )
+    return counts
+
+
+def _finish_cancelled_job(con, job_id):
+    con.execute(
+        """UPDATE enrichment_job_items
+           SET status='cancelled', processed_at=?
+           WHERE job_id=? AND status IN ('queued','running')""",
+        (utcnow(), job_id),
+    )
+    _refresh_job_counts(con, job_id)
+    con.execute(
+        "UPDATE enrichment_jobs SET status='cancelled', finished_at=? WHERE id=?",
+        (utcnow(), job_id),
+    )
+
+
+def _process_job(job_id, db_path):
+    with transaction(db_path) as con:
+        con.execute(
+            "UPDATE enrichment_jobs SET status='running', started_at=COALESCE(started_at, ?) WHERE id=?",
+            (utcnow(), job_id),
+        )
+    while True:
+        with transaction(db_path) as con:
+            job = con.execute("SELECT status, force FROM enrichment_jobs WHERE id=?", (job_id,)).fetchone()
+            if not job or job["status"] in {"cancelling", "cancelled"}:
+                if job:
+                    _finish_cancelled_job(con, job_id)
+                return
+            item = con.execute(
+                """SELECT product_code FROM enrichment_job_items
+                   WHERE job_id=? AND status='queued' ORDER BY rowid LIMIT 1""",
+                (job_id,),
+            ).fetchone()
+            if not item:
+                counts = _refresh_job_counts(con, job_id)
+                final_status = "completed_with_errors" if counts.get("failed", 0) else "completed"
+                con.execute(
+                    "UPDATE enrichment_jobs SET status=?, finished_at=? WHERE id=?",
+                    (final_status, utcnow(), job_id),
+                )
+                return
+            code = item["product_code"]
+            con.execute(
+                "UPDATE enrichment_job_items SET status='running' WHERE job_id=? AND product_code=?",
+                (job_id, code),
+            )
+            force = bool(job["force"])
+
+        item_status = "failed"
+        error = None
+        try:
+            enriched = enrich_product(code, force=force, db_path=db_path)
+            item_status = "verified" if enriched.get("enrichment_status") == "verified" else "review"
+        except Exception as exc:  # L'échec d'un article ne doit jamais arrêter les 299 suivants.
+            error = str(exc)[:1000]
+
+        with transaction(db_path) as con:
+            con.execute(
+                """UPDATE enrichment_job_items
+                   SET status=?, error=?, processed_at=?
+                   WHERE job_id=? AND product_code=?""",
+                (item_status, error, utcnow(), job_id, code),
+            )
+            if error:
+                con.execute("UPDATE enrichment_jobs SET last_error=? WHERE id=?", (error, job_id))
+            _refresh_job_counts(con, job_id)
+
+
+def _worker_loop(db_path):
+    global _WORKER_THREAD
+    try:
+        while True:
+            with transaction(db_path) as con:
+                row = con.execute(
+                    "SELECT id FROM enrichment_jobs WHERE status='queued' ORDER BY id LIMIT 1"
+                ).fetchone()
+            if not row:
+                return
+            _process_job(row["id"], db_path)
+    finally:
+        with _WORKER_GUARD:
+            _WORKER_THREAD = None
+        # Ferme la petite fenêtre de concurrence où un import peut ajouter une
+        # tâche juste après notre dernière lecture de la file.
+        with transaction(db_path) as con:
+            still_queued = con.execute(
+                "SELECT 1 FROM enrichment_jobs WHERE status='queued' LIMIT 1"
+            ).fetchone()
+        if still_queued:
+            _ensure_worker(db_path)
+
+
+def _ensure_worker(db_path=None):
+    global _WORKER_THREAD
+    with _WORKER_GUARD:
+        if _WORKER_THREAD and _WORKER_THREAD.is_alive():
+            return
+        _WORKER_THREAD = threading.Thread(
+            target=_worker_loop,
+            args=(db_path,),
+            name="technical-enrichment",
+            daemon=True,
+        )
+        _WORKER_THREAD.start()
+
+
+def resume_bulk_enrichment(db_path=None):
+    """Reprend les tâches interrompues après un redémarrage du conteneur."""
+    ready = technical_source_ready()
+    with transaction(db_path) as con:
+        cancelling = [
+            row[0]
+            for row in con.execute(
+                "SELECT id FROM enrichment_jobs WHERE status='cancelling'"
+            ).fetchall()
+        ]
+        for job_id in cancelling:
+            _finish_cancelled_job(con, job_id)
+        con.execute(
+            "UPDATE enrichment_job_items SET status='queued' WHERE status='running'"
+        )
+        con.execute(
+            "UPDATE enrichment_jobs SET status='queued' WHERE status='running'"
+        )
+        if ready:
+            con.execute(
+                "UPDATE enrichment_jobs SET status='queued', last_error=NULL WHERE status='blocked'"
+            )
+        queued = con.execute("SELECT COUNT(*) FROM enrichment_jobs WHERE status='queued'").fetchone()[0]
+    if queued:
+        _ensure_worker(db_path)
+    return queued
+
+
+def cancel_bulk_enrichment(job_id, db_path=None):
+    with transaction(db_path) as con:
+        job = con.execute("SELECT status FROM enrichment_jobs WHERE id=?", (job_id,)).fetchone()
+        if not job:
+            raise KeyError(f"Tâche d'enrichissement introuvable : {job_id}")
+        if job["status"] in {"queued", "blocked"}:
+            _finish_cancelled_job(con, job_id)
+        elif job["status"] == "running":
+            con.execute("UPDATE enrichment_jobs SET status='cancelling' WHERE id=?", (job_id,))
+    return get_bulk_job(job_id, db_path)
 
 
 def seed_preverified(path=None, db_path=None):

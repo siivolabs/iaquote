@@ -79,6 +79,36 @@ def init_db(path=None):
                 fetched_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS enrichment_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                trigger TEXT NOT NULL DEFAULT 'manual',
+                force INTEGER NOT NULL DEFAULT 0,
+                total INTEGER NOT NULL DEFAULT 0,
+                processed INTEGER NOT NULL DEFAULT 0,
+                verified INTEGER NOT NULL DEFAULT 0,
+                review INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0,
+                cancelled INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_status
+                ON enrichment_jobs(status, id);
+
+            CREATE TABLE IF NOT EXISTS enrichment_job_items (
+                job_id INTEGER NOT NULL REFERENCES enrichment_jobs(id) ON DELETE CASCADE,
+                product_code TEXT NOT NULL REFERENCES products(code) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'queued',
+                error TEXT,
+                processed_at TEXT,
+                PRIMARY KEY(job_id, product_code)
+            );
+            CREATE INDEX IF NOT EXISTS idx_enrichment_job_items_status
+                ON enrichment_job_items(job_id, status);
+
             CREATE TABLE IF NOT EXISTS quotes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at TEXT NOT NULL,
